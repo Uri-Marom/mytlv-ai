@@ -48,6 +48,15 @@ VENUES = {
         "subcategory":  "live",
         "strategy":     "html",
     },
+    "beit_radical": {
+        "label":        "Beit Radical",
+        "url":          "https://radical.org.il",
+        "events_url":   "https://radical.org.il/events/",
+        "neighborhood": "Herzl Hill",
+        "category":     "cultural",
+        "subcategory":  "talk",
+        "strategy":     "playwright",
+    },
     "hameretz2": {
         "label":        "Hameretz 2",
         "url":          "https://hameretz2.org",
@@ -501,10 +510,125 @@ def _scrape_hameretz2(page, cfg) -> list[VenueEvent]:
 
 # ── Playwright runner ────────────────────────────────────────────────────────
 
+def _scrape_beit_radical(page, cfg) -> list[VenueEvent]:
+    log.info("Beit Radical: loading events listing...")
+    page.goto(cfg["events_url"], timeout=20000, wait_until="domcontentloaded")
+    time.sleep(2)
+
+    # Collect all unique event slugs
+    links = page.eval_on_selector_all(
+        "a[href*='/events/']",
+        "els => [...new Set(els.map(e => e.href))].filter(h => h.split('/').filter(Boolean).length >= 4)"
+    )
+    log.info(f"Beit Radical: {len(links)} event links found")
+
+    FILM_KW     = re.compile(r"סרט|הקרנה|film|cinema|🎬", re.I)
+    STANDUP_KW  = re.compile(r"סטנד.?אפ|stand.?up|comedy|קומדי", re.I)
+    CLASSICAL_KW= re.compile(r"קלאסי|orchestra|symphon|quartet", re.I)
+    MUSIC_KW    = re.compile(r"מופע|הופעה|להקה|לייב|concert|live", re.I)
+
+    events = []
+    seen = set()
+    detail_page = page.context.new_page()
+
+    for href in links:
+        slug = href.rstrip("/").rsplit("/", 1)[-1]
+        if slug in seen or slug in ("events",): continue
+        seen.add(slug)
+
+        try:
+            detail_page.goto(href, timeout=15000, wait_until="domcontentloaded")
+            time.sleep(1)
+            txt = detail_page.inner_text("body")
+            lines = [l.strip() for l in txt.split('\n') if l.strip()]
+            title = detail_page.title().replace(" - רדיקל","").replace(" | Radical","").strip()
+            if not title: continue
+
+            # Date: "ראשון, 14/06/2026" or "שני | 15.06 | 19:00"
+            ev_date, start_time, end_time = None, None, None
+            for l in lines:
+                m = re.search(r"(\d{1,2})[./](\d{2})[./](\d{4})", l)
+                if m:
+                    d, mo, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                    try: ev_date = date(yr, mo, d)
+                    except ValueError: pass
+                elif not ev_date:
+                    m2 = re.search(r"(\d{1,2})\.(\d{2})\b", l)
+                    if m2:
+                        d, mo = int(m2.group(1)), int(m2.group(2))
+                        yr = date.today().year
+                        if mo < date.today().month - 1: yr += 1
+                        try: ev_date = date(yr, mo, d)
+                        except ValueError: pass
+                if ev_date: break
+
+            # Time: "התחלה: 20:00" or "| 19:00"
+            for l in lines:
+                m = re.search(r"(?:התחלה|לייב|Begin)[:\s]*(\d{1,2}:\d{2})", l)
+                if m: start_time = m.group(1); break
+                m2 = re.search(r"\|\s*(\d{1,2}:\d{2})\b", l)
+                if m2: start_time = m2.group(1); break
+
+            # Price
+            price_min, price_max = None, None
+            for l in lines:
+                if "מחיר" in l or "₪" in l:
+                    pm, px = _parse_price(l)
+                    if pm is not None:
+                        price_min, price_max = pm, px
+                        break
+
+            if not ev_date: continue
+
+            # Category inference
+            combined = f"{title} {' '.join(lines[:20])}"
+            if STANDUP_KW.search(combined):
+                category, subcategory = "standup", "standup"
+            elif FILM_KW.search(combined):
+                category, subcategory = "cultural", "film"
+            elif CLASSICAL_KW.search(combined):
+                category, subcategory = "music", "classical"
+            elif MUSIC_KW.search(combined):
+                category, subcategory = "music", "live"
+            else:
+                category, subcategory = "cultural", "talk"
+
+            # Description: longest paragraph-like line
+            desc = next((l for l in lines if len(l) > 80), "")[:400]
+
+            events.append(VenueEvent(
+                source="venue_beit_radical",
+                source_id=slug,
+                title=title,
+                venue_name=cfg["label"],
+                neighborhood=cfg["neighborhood"],
+                category=category,
+                subcategory=subcategory,
+                event_date=ev_date,
+                start_time=start_time,
+                end_time=end_time,
+                image_url=None,
+                ticket_url=href,
+                source_url=href,
+                description=desc,
+                price_min=price_min,
+                price_max=price_max,
+                tags=[],
+            ))
+            time.sleep(0.5)
+        except Exception as e:
+            log.debug(f"Beit Radical {href}: {e}")
+
+    detail_page.close()
+    log.info(f"Beit Radical: {len(events)} events parsed")
+    return events
+
+
 PW_SCRAPERS = {
-    "barby":     _scrape_barby,
-    "levontin7": _scrape_levontin7,
-    "hameretz2": _scrape_hameretz2,
+    "barby":        _scrape_barby,
+    "levontin7":    _scrape_levontin7,
+    "hameretz2":    _scrape_hameretz2,
+    "beit_radical": _scrape_beit_radical,
 }
 
 def scrape_playwright_venues(venue_ids) -> list[VenueEvent]:

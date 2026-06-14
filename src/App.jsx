@@ -29,6 +29,7 @@ const SOURCE_META = {
   venue_levontin7:      { label: "Levontin 7",   color: "#06b6d4" },
   venue_hangar11:       { label: "Hangar 11",    color: "#10b981" },
   venue_hameretz2:      { label: "Hameretz 2",   color: "#f59e0b" },
+  venue_beit_radical:   { label: "Beit Radical", color: "#818cf8" },
 };
 
 const CAT_EMOJI = {
