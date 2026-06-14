@@ -64,8 +64,8 @@ function fmtDate(d, lang = "en") {
 }
 
 function fmtPrice(ev) {
+  if (ev.price_min === null || ev.price_min === undefined) return "";
   if (ev.price_min === 0 && !ev.price_max) return "Free";
-  if (ev.price_min === 0 && ev.price_max === 0) return "Free";
   if (ev.price_max && ev.price_max !== ev.price_min) return `₪${ev.price_min}–${ev.price_max}`;
   return `₪${ev.price_min}`;
 }
@@ -641,7 +641,7 @@ export default function App() {
       if (disliked.has(ev.id)) return false;
       if (!matchDate(ev, dateFil, dateRange)) return false;
       if (activeCats.size > 0 && ![...activeCats].some(c => evMatchesCat(ev, c))) return false;
-      if (freeOnly && ev.price_min !== 0) return false;
+      if (freeOnly && (ev.price_min === null || ev.price_min > 0)) return false;
       if (search) {
         const q = search.toLowerCase();
         return ev.title.toLowerCase().includes(q) ||

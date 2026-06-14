@@ -76,7 +76,7 @@ class VenueEvent:
     image_url:   Optional[str]
     ticket_url:  Optional[str]
     source_url:  str
-    price_min:   int = 0
+    price_min:   Optional[int] = None
     price_max:   Optional[int] = None
     description: str = ""
     tags:        list = field(default_factory=list)
@@ -91,11 +91,12 @@ def _slugify(s: str) -> str:
     return re.sub(r"[\s_]+", "-", s.strip())[:60]
 
 def _parse_price(text: str):
-    if not text: return 0, None
+    """Returns (min, max). Returns (None, None) when price is unknown/unlisted."""
+    if not text: return None, None
     if "חינ" in text or "free" in text.lower(): return 0, None
-    nums = [int(n) for n in re.findall(r"\d+", text) if int(n) < 5000]
-    if not nums: return 0, None
-    return min(nums), (max(nums) if len(nums) > 1 else None)
+    nums = [int(n) for n in re.findall(r"\d+", text) if 5 < int(n) < 5000]
+    if not nums: return None, None
+    return min(nums), (max(nums) if len(set(nums)) > 1 else None)
 
 def _derive_categories(category, subcategory):
     if category == "cultural" and subcategory == "exhibition": return ["art"]
@@ -158,8 +159,8 @@ def _scrape_barby(page, cfg) -> list[VenueEvent]:
         title = title_candidates[0].strip()
         if not title: continue
 
-        # Price
-        price_line = next((l for l in lines if "מחיר" in l), None)
+        # Price (only available on Barby for the next show banner; None = unknown)
+        price_line = next((l for l in lines if "מחיר" in l or "₪" in l), None)
         price_min, price_max = _parse_price(price_line or "")
 
         # Ticket availability
