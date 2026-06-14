@@ -219,6 +219,65 @@ def _scrape_levontin7(page, cfg) -> list[VenueEvent]:
 
     events = []
     seen = set()
+    # Cache price by slug to avoid fetching the same slug twice (same show, different dates)
+    slug_price_cache = {}
+    detail_page = page.context.new_page()
+
+    def _fetch_levontin_price(slug_url):
+        """Visit a Levontin event page and extract ticket price."""
+        if slug_url in slug_price_cache:
+            return slug_price_cache[slug_url]
+        try:
+            detail_page.goto(slug_url, timeout=12000, wait_until="domcontentloaded")
+            time.sleep(1)
+            price = detail_page.evaluate("""() => {
+                // Try direct selectors first
+                for (const cls of ['fat-event-total-fees', 'fat-event-fees']) {
+                    const el = document.querySelector('.' + cls);
+                    if (el) {
+                        // Try text node after
+                        const next = el.nextSibling;
+                        if (next && next.nodeType === 3) {
+                            const t = next.textContent.trim();
+                            const n = parseInt(t, 10);
+                            if (!isNaN(n) && n > 5 && n < 5000) return n;
+                        }
+                        // Try inside element
+                        const inner = el.innerText?.replace(/[^0-9]/g, '');
+                        if (inner) {
+                            const n = parseInt(inner, 10);
+                            if (!isNaN(n) && n > 5 && n < 5000) return n;
+                        }
+                        // Try parent text
+                        const parentTxt = (el.parentElement?.innerText || '');
+                        const m = parentTxt.match(/\\b(\\d{2,3})\\b/);
+                        if (m) {
+                            const n = parseInt(m[1], 10);
+                            if (n > 5 && n < 5000) return n;
+                        }
+                    }
+                }
+                // Scan all text nodes for price-like numbers (2-3 digits, 5-500 range)
+                let foundPrice = null;
+                const walker = document.createTreeWalker(
+                    document.body, NodeFilter.SHOW_TEXT, null
+                );
+                let node;
+                while (node = walker.nextNode()) {
+                    const m = node.textContent.match(/\\b(\\d{2,3})\\b/);
+                    if (m) {
+                        const n = parseInt(m[1], 10);
+                        if (n > 5 && n < 500) foundPrice = n;  // last match wins
+                    }
+                }
+                return foundPrice;
+            }""")
+            slug_price_cache[slug_url] = price
+            return price
+        except Exception as e:
+            log.debug(f"Levontin price fetch error {slug_url}: {e}")
+            slug_price_cache[slug_url] = None
+            return None
 
     for link in links:
         href = link.get("href", "")
@@ -252,6 +311,11 @@ def _scrape_levontin7(page, cfg) -> list[VenueEvent]:
         if source_id in seen: continue
         seen.add(source_id)
 
+        # Fetch price from the detail page (cached per slug)
+        slug_url = href.split("?")[0]
+        raw_price = _fetch_levontin_price(slug_url)
+        price_min = raw_price if raw_price else None
+
         events.append(VenueEvent(
             source="venue_levontin7",
             source_id=source_id,
@@ -264,13 +328,14 @@ def _scrape_levontin7(page, cfg) -> list[VenueEvent]:
             start_time=start_time,
             end_time=end_time,
             image_url=None,
-            ticket_url=href.split("?")[0],  # clean URL without timestamps
+            ticket_url=slug_url,
             source_url=href,
-            price_min=0,
+            price_min=price_min,
             tags=["Live Music"],
         ))
 
-    log.info(f"Levontin 7: {len(events)} events parsed")
+    detail_page.close()
+    log.info(f"Levontin 7: {len(events)} events parsed (price cache: {len(slug_price_cache)} slugs)")
     return events
 
 # ── Hangar 11 scraper (static HTML) ──────────────────────────────────────────
