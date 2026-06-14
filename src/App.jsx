@@ -64,7 +64,11 @@ function getSimilar(events, eventId, n = 5) {
     .map(e => ({ ...e, _sim: row[e.id] }));
 }
 
-function matchDate(ev, filter) {
+function matchDate(ev, filter, dateRange) {
+  if (dateRange?.start) {
+    if (dateRange.end) return ev.event_date >= dateRange.start && ev.event_date <= dateRange.end;
+    return ev.event_date === dateRange.start;
+  }
   if (filter === "all") return true;
   const diff = Math.round((new Date(ev.event_date+"T00:00:00") - new Date(TODAY+"T00:00:00")) / 86400000);
   if (filter === "today")     return diff === 0;
@@ -314,6 +318,116 @@ function Modal({ ev, events, onClose, onNavigate }) {
   );
 }
 
+// ── Mini Calendar ──────────────────────────────────────────────────────────
+const DAY_LABELS = ["Mo","Tu","We","Th","Fr","Sa","Su"];
+const MONTH_NAMES = ["January","February","March","April","May","June",
+                     "July","August","September","October","November","December"];
+
+function MiniCalendar({ range, onChange, onClose }) {
+  const now = new Date(TODAY + "T00:00:00");
+  const [view, setView] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const [picking, setPicking] = useState(null); // "start" awaiting end click
+
+  function isoOf(y, m, d) {
+    return `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  }
+
+  function daysInMonth(y, m) { return new Date(y, m+1, 0).getDate(); }
+  function firstDow(y, m) { return (new Date(y, m, 1).getDay() + 6) % 7; } // Mon=0
+
+  function handleDay(iso) {
+    if (!range.start || (range.start && range.end)) {
+      onChange({ start: iso, end: null });
+      setPicking("end");
+    } else {
+      const s = range.start;
+      onChange({ start: iso < s ? iso : s, end: iso < s ? s : iso });
+      setPicking(null);
+    }
+  }
+
+  function inRange(iso) {
+    if (!range.start || !range.end) return false;
+    return iso >= range.start && iso <= range.end;
+  }
+
+  const { y, m } = view;
+  const days = daysInMonth(y, m);
+  const offset = firstDow(y, m);
+  const cells = [];
+  for (let i = 0; i < offset; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(d);
+  while (cells.length % 7) cells.push(null);
+
+  return (
+    <div style={{ background:T.bg1, border:`1px solid ${T.border}`, borderRadius:12,
+                  padding:"14px 12px", marginTop:8, userSelect:"none" }}>
+      {/* Month nav */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+        <button onClick={()=>setView(v=>v.m===0?{y:v.y-1,m:11}:{y:v.y,m:v.m-1})}
+          style={{ background:"none", border:"none", color:T.textMid, cursor:"pointer", fontSize:16, padding:"0 4px" }}>‹</button>
+        <span style={{ fontFamily:T.font, fontSize:12, fontWeight:700, color:T.text }}>
+          {MONTH_NAMES[m]} {y}
+        </span>
+        <button onClick={()=>setView(v=>v.m===11?{y:v.y+1,m:0}:{y:v.y,m:v.m+1})}
+          style={{ background:"none", border:"none", color:T.textMid, cursor:"pointer", fontSize:16, padding:"0 4px" }}>›</button>
+      </div>
+
+      {/* Day labels */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2, marginBottom:4 }}>
+        {DAY_LABELS.map(d => (
+          <div key={d} style={{ textAlign:"center", fontFamily:T.font, fontSize:9,
+                                color:T.textDim, fontWeight:600 }}>{d}</div>
+        ))}
+      </div>
+
+      {/* Day cells */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2 }}>
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const iso = isoOf(y, m, d);
+          const isStart = iso === range.start;
+          const isEnd   = iso === range.end;
+          const isIn    = inRange(iso);
+          const isPast  = iso < TODAY;
+          const isToday = iso === TODAY;
+          return (
+            <button key={i} onClick={()=>!isPast && handleDay(iso)}
+              style={{
+                padding:"5px 0", borderRadius:6, border:"none", cursor: isPast ? "default" : "pointer",
+                fontFamily:T.body, fontSize:11, fontWeight: isStart||isEnd ? 700 : 400,
+                background: isStart||isEnd ? T.amber : isIn ? T.amberDim : "transparent",
+                color: isStart||isEnd ? T.bg0 : isPast ? T.textDim : isToday ? T.amber : T.text,
+                outline: isToday && !isStart ? `1px solid ${T.amber}` : "none",
+                opacity: isPast ? 0.4 : 1,
+              }}>{d}</button>
+          );
+        })}
+      </div>
+
+      {/* Footer */}
+      <div style={{ marginTop:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <span style={{ fontFamily:T.body, fontSize:10, color:T.textMid }}>
+          {range.start && !range.end ? "Tap end date" :
+           range.start && range.end && range.start===range.end ? range.start :
+           range.start && range.end ? `${range.start} → ${range.end}` : "Tap a date"}
+        </span>
+        <div style={{ display:"flex", gap:6 }}>
+          {range.start && (
+            <button onClick={()=>{ onChange({start:null,end:null}); setPicking(null); }}
+              style={{ background:"none", border:"none", color:T.textDim, fontFamily:T.body,
+                       fontSize:10, cursor:"pointer" }}>Clear</button>
+          )}
+          <button onClick={onClose}
+            style={{ background:T.bg2, border:`1px solid ${T.border}`, color:T.textMid,
+                     fontFamily:T.font, fontSize:10, fontWeight:600, padding:"3px 10px",
+                     borderRadius:6, cursor:"pointer" }}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Date nav strip ─────────────────────────────────────────────────────────
 const DATE_FILTERS = [
   { id:"today",     label:"Today"     },
@@ -333,14 +447,16 @@ const CATEGORIES = [
 
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
-  const [events,   setEvents]   = useState(DB.events);
-  const [loading,  setLoading]  = useState(true);
-  const [dateFil,  setDateFil]  = useState("weekend");
-  const [catFil,   setCatFil]   = useState("all");
-  const [priceFil, setPriceFil] = useState("all");
-  const [search,   setSearch]   = useState("");
-  const [selected, setSelected] = useState(null);
-  const [history,  setHistory]  = useState([]);
+  const [events,    setEvents]    = useState(DB.events);
+  const [loading,   setLoading]   = useState(true);
+  const [dateFil,   setDateFil]   = useState("weekend");
+  const [dateRange, setDateRange] = useState({ start: null, end: null });
+  const [calOpen,   setCalOpen]   = useState(false);
+  const [catFil,    setCatFil]    = useState("all");
+  const [priceFil,  setPriceFil]  = useState("all");
+  const [search,    setSearch]    = useState("");
+  const [selected,  setSelected]  = useState(null);
+  const [history,   setHistory]   = useState([]);
 
   useEffect(() => {
     fetch("/api/events")
@@ -355,7 +471,7 @@ export default function App() {
 
   const filtered = useMemo(() => {
     return events.filter(ev => {
-      if (!matchDate(ev, dateFil)) return false;
+      if (!matchDate(ev, dateFil, dateRange)) return false;
       if (catFil === "dj-set" && ev.subcategory !== "dj-set") return false;
       if (catFil !== "all" && catFil !== "dj-set" && ev.category !== catFil) return false;
       if (priceFil === "free" && ev.price_min !== 0) return false;
@@ -372,7 +488,7 @@ export default function App() {
       if (a.event_date !== b.event_date) return a.event_date < b.event_date ? -1 : 1;
       return (a.start_time||"") < (b.start_time||"") ? -1 : 1;
     });
-  }, [events, dateFil, catFil, priceFil, search]);
+  }, [events, dateFil, dateRange, catFil, priceFil, search]);
 
   // Group by date
   const grouped = useMemo(() => {
@@ -425,13 +541,26 @@ export default function App() {
           {/* Date strip + price */}
           <div style={{ display:"flex", gap:5, alignItems:"center", overflowX:"auto", paddingBottom:12, scrollbarWidth:"none" }}>
             {DATE_FILTERS.map(df => (
-              <button key={df.id} onClick={()=>setDateFil(df.id)} style={{
+              <button key={df.id} onClick={()=>{ setDateFil(df.id); setDateRange({start:null,end:null}); setCalOpen(false); }} style={{
                 padding:"5px 13px", borderRadius:6, border:"none", whiteSpace:"nowrap",
-                background: dateFil===df.id ? T.amber : T.bg2,
-                color: dateFil===df.id ? T.bg0 : T.textMid,
-                fontFamily:T.font, fontSize:11, fontWeight: dateFil===df.id ? 700 : 500, cursor:"pointer",
+                background: !dateRange.start && dateFil===df.id ? T.amber : T.bg2,
+                color: !dateRange.start && dateFil===df.id ? T.bg0 : T.textMid,
+                fontFamily:T.font, fontSize:11, fontWeight: !dateRange.start && dateFil===df.id ? 700 : 500, cursor:"pointer",
               }}>{df.label}</button>
             ))}
+            {/* Calendar toggle */}
+            <button onClick={()=>setCalOpen(o=>!o)} style={{
+              padding:"5px 10px", borderRadius:6, border:"none", whiteSpace:"nowrap", flexShrink:0,
+              background: dateRange.start ? T.amber : calOpen ? T.bg2 : "transparent",
+              color: dateRange.start ? T.bg0 : T.textMid,
+              fontFamily:T.font, fontSize:11, fontWeight: dateRange.start ? 700 : 500, cursor:"pointer",
+            }}>
+              {dateRange.start
+                ? (dateRange.end && dateRange.end !== dateRange.start
+                    ? `${dateRange.start.slice(5)} – ${dateRange.end.slice(5)}`
+                    : dateRange.start.slice(5))
+                : "📅"}
+            </button>
             <div style={{ marginLeft:"auto", display:"flex", gap:4 }}>
               {["all","free","paid"].map(p => (
                 <button key={p} onClick={()=>setPriceFil(p)} style={{
@@ -445,6 +574,13 @@ export default function App() {
               ))}
             </div>
           </div>
+          {calOpen && (
+            <MiniCalendar
+              range={dateRange}
+              onChange={r=>{ setDateRange(r); if(r.start) setDateFil("all"); }}
+              onClose={()=>setCalOpen(false)}
+            />
+          )}
 
           {/* Category pills */}
           <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:14, scrollbarWidth:"none" }}>
