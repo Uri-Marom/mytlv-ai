@@ -1,7 +1,8 @@
 """
 Secret Tel Aviv scraper
-Primary: Tribe Events Calendar REST API  /wp-json/tribe/events/v1/events
-Fallback: HTML scraping of category listing + detail pages
+Strategy: parse the Events Manager table on /tickets (static HTML, no JS needed).
+The listing page has date, time, title, and link for all upcoming events.
+Detail pages are fetched for og:description and og:image only.
 """
 import os, re, time, logging
 from datetime import datetime, date
@@ -104,8 +105,12 @@ def _extract_prices_from_text(text: str):
         return None, None
     return all_prices[0], (all_prices[-1] if len(all_prices) > 1 else None)
 
+_SKIP_PRICE_DOMAINS = {"facebook.com", "instagram.com", "youtube.com", "t.me", "twitter.com"}
+
 def _fetch_external_price(url: str):
     """Follow an external ticket URL (e.g. LiveNation) and try to extract price."""
+    if any(d in url for d in _SKIP_PRICE_DOMAINS):
+        return None, None
     try:
         r = _get(url)
         if not r: return None, None
@@ -127,7 +132,7 @@ def _prices_from_soup(soup) -> tuple:
         text_lower = (a.get_text(strip=True) or "").lower()
         is_original = "original event" in text_lower or "לאירוע המקורי" in text_lower
         is_external = any(d in href for d in EXTERNAL_EVENT_DOMAINS + TICKET_DOMAINS)
-        if (is_original or is_external) and href.startswith("http"):
+        if (is_original or is_external) and href.startswith("http") and not any(d in href for d in _SKIP_PRICE_DOMAINS):
             pmin, pmax = _fetch_external_price(href)
             if pmin is not None:
                 return pmin, pmax
@@ -347,28 +352,163 @@ def _fetch_playwright(sta_cat, our_cat):
     log.info(f"  Playwright path: {len(events)} events for {sta_cat}")
     return events
 
+# ── Listing-table scraper (primary path) ────────────────────────────────────
+
+# Keyword → (category, subcategory) inference from title
+_MUSIC_KW    = re.compile(r"\blive\b|concert|band|להקה|הופעה|מופע", re.I)
+_DJ_KW       = re.compile(r"\bparty\b|dj\b|rave|techno|trance|house|electronic|מסיבה", re.I)
+_STANDUP_KW  = re.compile(r"stand.?up|סטנד.?אפ|comedy|קומדי", re.I)
+_FILM_KW     = re.compile(r"\bfilm\b|cinema|screening|הקרנה", re.I)
+_MARKET_KW   = re.compile(r"market|fair|שוק|יריד", re.I)
+_FOOD_KW     = re.compile(r"food|dinner|tasting|wine|אוכל|טעימות|יין", re.I)
+_CULTURAL_KW = re.compile(r"tour|exhibit|lecture|talk|book|reading|workshop|סיור|תערוכה|הרצאה", re.I)
+
+def _infer_sta_cat(title, desc=""):
+    combined = f"{title} {desc}"
+    if _STANDUP_KW.search(combined):   return "standup",  "standup"
+    if _FILM_KW.search(combined):      return "cultural", "film"
+    if _FOOD_KW.search(combined):      return "market",   "food"
+    if _MARKET_KW.search(combined):    return "market",   "crafts"
+    if _CULTURAL_KW.search(combined):  return "cultural", "general"
+    if _DJ_KW.search(combined):        return "music",    "dj-set"
+    if _MUSIC_KW.search(combined):     return "music",    "live"
+    return "cultural", "general"
+
+def _parse_sta_time(time_str):
+    """Convert '6:00 pm' → '18:00'"""
+    m = re.search(r"(\d{1,2}):(\d{2})\s*(am|pm)", time_str, re.I)
+    if not m: return None
+    hh, mm, ampm = int(m.group(1)), int(m.group(2)), m.group(3).lower()
+    if ampm == "pm" and hh != 12: hh += 12
+    if ampm == "am" and hh == 12: hh = 0
+    return f"{hh:02d}:{mm:02d}"
+
+def _scrape_listing_table():
+    """Parse the Events Manager table on /tickets — one request, all events."""
+    r = _get(f"{BASE}/tickets")
+    if not r: return []
+    soup = BeautifulSoup(r.text, "html.parser")
+    table = soup.find("table", class_="events-table")
+    if not table:
+        log.warning("STA: events-table not found on /tickets")
+        return []
+
+    rows = table.find_all("tr")[1:]  # skip header row
+    log.info(f"STA: found {len(rows)} table rows")
+    events, seen, today = [], set(), date.today()
+
+    for row in rows:
+        tds = row.find_all("td")
+        if len(tds) < 3: continue
+
+        date_td  = tds[1].get_text(separator=" ").strip()
+        event_td = tds[2]
+        price_td = tds[3].get_text(separator=" ").strip() if len(tds) > 3 else ""
+
+        # Parse date
+        m_date = re.search(r"(\d{1,2})/(\d{2})/(\d{4})", date_td)
+        if not m_date: continue
+        try:
+            ev_date = date(int(m_date.group(3)), int(m_date.group(2)), int(m_date.group(1)))
+        except ValueError:
+            continue
+        if ev_date < today: continue
+
+        # Parse time
+        start_time = _parse_sta_time(date_td)
+        end_time   = None
+        m_times = re.findall(r"\d{1,2}:\d{2}\s*(?:am|pm)", date_td, re.I)
+        if len(m_times) >= 2:
+            end_time = _parse_sta_time(m_times[1])
+
+        # Title and URL
+        link = event_td.find("a", href=True)
+        if not link: continue
+        title = link.get_text(strip=True)
+        url   = link["href"]
+        slug  = url.rstrip("/").rsplit("/", 1)[-1]
+        if slug in seen: continue
+        seen.add(slug)
+
+        # Venue from "Title @ Venue" pattern
+        venue_name = None
+        m_at = re.search(r"@\s+(.+)$", title)
+        if m_at:
+            venue_name = m_at.group(1).strip()
+            title = title[:m_at.start()].strip()
+
+        # Fetch detail page for description, image, ticket URL, price.
+        # Some STA pages redirect to external sites (Facebook etc.) — detect and skip.
+        description, image_url, ticket_url = "", None, None
+        pmin, pmax = _prices_from_soup(BeautifulSoup(price_td, "html.parser"))
+
+        try:
+            r2 = session.get(url, timeout=12, allow_redirects=True)
+            # If we ended up on an external domain, use it as ticket_url and skip parse
+            if BASE not in r2.url:
+                ticket_url = r2.url
+            elif r2.ok:
+                s2 = BeautifulSoup(r2.text, "html.parser")
+                description = (_og(s2, "og:description") or "")[:400]
+                image_url   = _og(s2, "og:image")
+                ticket_url  = _ticket_url(s2)
+                if pmin is None:
+                    pmin, pmax = _prices_from_soup(s2)
+            time.sleep(0.4)
+        except Exception as e:
+            log.debug(f"STA detail {url}: {e}")
+
+        category, subcategory = _infer_sta_cat(title, description)
+
+        events.append(Event(
+            source_id    = slug,
+            title        = title,
+            description  = description,
+            category     = category,
+            subcategory  = subcategory,
+            sta_category = "",
+            event_date   = ev_date,
+            start_time   = start_time,
+            end_time     = end_time,
+            venue_name   = venue_name,
+            venue_address= None,
+            image_url    = image_url,
+            ticket_url   = ticket_url,
+            source_url   = url,
+            price_min    = pmin,
+            price_max    = pmax,
+        ))
+        time.sleep(0.4)
+
+    log.info(f"STA: {len(events)} future events parsed from listing table")
+    return events
+
 # ── Public entry point ──────────────────────────────────────────────────────
 
 def scrape(use_api=True):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # Try API first (fast, structured); fall back to listing-table parser
     if use_api:
         probe = _get(f"{API}/events", {"per_page":1})
         use_api = probe is not None
-    log.info(f"API available: {use_api}")
+    log.info(f"STA API available: {use_api}")
 
-    all_events, seen = [], set()
-    for sta_cat, our_cat in CATEGORY_MAP.items():
-        log.info(f"Category: {sta_cat}")
-        evs = _fetch_api(sta_cat, our_cat) if use_api else _fetch_playwright(sta_cat, our_cat)
-        for ev in evs:
-            if ev.source_id not in seen:
-                seen.add(ev.source_id)
-                all_events.append(ev)
-        log.info(f"  -> {len(evs)} events ({len(all_events)} total)")
-    return all_events
+    if use_api:
+        all_events, seen = [], set()
+        for sta_cat, our_cat in CATEGORY_MAP.items():
+            log.info(f"Category: {sta_cat}")
+            evs = _fetch_api(sta_cat, our_cat)
+            for ev in evs:
+                if ev.source_id not in seen:
+                    seen.add(ev.source_id)
+                    all_events.append(ev)
+            log.info(f"  -> {len(evs)} events ({len(all_events)} total)")
+        return all_events
+    else:
+        return _scrape_listing_table()
 
 if __name__ == "__main__":
     evs = scrape()
     print(f"\nTotal: {len(evs)}")
-    for e in evs[:5]:
-        print(f"  {e.event_date} {e.start_time} | {e.title[:50]} | {e.venue_name}")
+    for e in evs[:10]:
+        print(f"  {e.event_date} {e.start_time} | {e.title[:50]:<50} | {e.venue_name}")
