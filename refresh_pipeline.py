@@ -262,8 +262,77 @@ def get_event_links(sta_category: str) -> list[tuple[str, str]]:
 
 def _derive_categories(category, subcategory):
     if category == "cultural" and subcategory == "exhibition": return ["art"]
-    if category == "market" and subcategory == "food": return ["food"]
+    if category == "market"   and subcategory == "food":       return ["food"]
+    if category == "music"    and subcategory == "classical":   return ["music", "classical"]
     return [category]
+
+# Keyword-based category/subcategory fixes applied AFTER every upsert.
+# This ensures manual category corrections survive future scrapes.
+CATEGORY_RULES = [
+    # Art exhibitions that arrive as cultural/general
+    ("UPDATE events SET subcategory='exhibition', categories=ARRAY['art'] "
+     "WHERE source='secret_tel_aviv' AND category='cultural' AND subcategory IN ('general','') "
+     "AND (title ILIKE '%exhibition%' OR title ILIKE '%fresh paint%' "
+     "     OR title ILIKE '%illustrator fair%' OR title ILIKE '%live art%' "
+     "     OR title ILIKE '%house of others%')",
+     "Re-tag art exhibitions"),
+
+    # Talks hiding as cultural/general
+    ("UPDATE events SET subcategory='talk', categories=ARRAY['cultural'] "
+     "WHERE source='secret_tel_aviv' AND category='cultural' AND subcategory='general' "
+     "AND (title ILIKE '%talk%' OR title ILIKE '%discourse%' OR title ILIKE '%lecture%')",
+     "Re-tag talks"),
+
+    # Classical music
+    ("UPDATE events SET subcategory='classical', categories=ARRAY['music','classical'] "
+     "WHERE category='music' AND subcategory='live' "
+     "AND (title ILIKE '%quartet%' OR title ILIKE '%orchestra%' OR title ILIKE '%philharmon%' "
+     "     OR title ILIKE '%opera%' OR title ILIKE '%classical%' OR title ILIKE '%symphon%')",
+     "Tag classical music"),
+
+    # Dance shows
+    ("UPDATE events SET category='dance', categories=ARRAY['dance'] "
+     "WHERE category='cultural' AND subcategory NOT IN ('film','talk','exhibition') "
+     "AND (title ILIKE '%dance festival%' OR title ILIKE '%ballet%' OR title ILIKE '%choreograph%' "
+     "     OR title ILIKE '%contemporary dance%')",
+     "Tag dance shows"),
+
+    # Stand-up comedy
+    ("UPDATE events SET category='standup', categories=ARRAY['standup'] "
+     "WHERE (title ILIKE '%stand up%' OR title ILIKE '%standup%' OR title ILIKE '%stand-up%' "
+     "       OR title ILIKE '%ערסים%' OR title ILIKE '%קומדיה%' OR title ILIKE '%comedy%') "
+     "AND category != 'standup'",
+     "Tag standup"),
+
+    # Film screenings (ensure subcategory=film)
+    ("UPDATE events SET subcategory='film', categories=ARRAY['cultural','film'] "
+     "WHERE category='cultural' AND subcategory='general' "
+     "AND (title ILIKE '%screening%' OR title ILIKE '%film%' OR title ILIKE '%cinema%' "
+     "     OR title ILIKE '%movie%' OR title ILIKE '%קולנוע%' OR title ILIKE '%סרט%')",
+     "Tag film screenings"),
+
+    # Multi-category border cases (preserve manually set ones)
+    ("UPDATE events SET categories=ARRAY['art','music'] "
+     "WHERE title ILIKE '%live from the storm%'",
+     "Live From the Storm multi-cat"),
+
+    ("UPDATE events SET categories=ARRAY['food','music'] "
+     "WHERE title ILIKE '%jazz%wine%' OR title ILIKE '%wine%jazz%'",
+     "Jazz & Wine multi-cat"),
+
+    ("UPDATE events SET categories=ARRAY['cultural','art'] "
+     "WHERE title ILIKE '%tipsy talk%' AND title ILIKE '%monet%'",
+     "Tipsy Talks multi-cat"),
+]
+
+def apply_category_rules(conn):
+    """Run keyword-based corrections after every upsert so they survive refreshes."""
+    with conn.cursor() as cur:
+        for sql, desc in CATEGORY_RULES:
+            cur.execute(sql)
+            if cur.rowcount:
+                log.info(f"  category rule [{cur.rowcount}]: {desc}")
+    conn.commit()
 
 def upsert_events(events: list[Event], conn):
     rows = [(
@@ -387,7 +456,7 @@ def main():
 
     upsert_events(events, conn)
 
-    # Step 4: venue-direct scrapers (Barby, Levontin 7, Hangar 11)
+    # Step 4: venue-direct scrapers (Barby, Levontin 7, Hangar 11, Hameretz2)
     if not args.no_venues:
         log.info("Step 4: scraping venue sites...")
         try:
@@ -398,6 +467,10 @@ def main():
             upsert_venue_events(venue_events, conn)
         except Exception as e:
             log.warning(f"Venue scrapers failed: {e}")
+
+    # Step 5: apply category correction rules
+    log.info("Step 5: applying category rules...")
+    apply_category_rules(conn)
 
     conn.close()
 

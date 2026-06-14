@@ -28,14 +28,17 @@ const SOURCE_META = {
   venue_barby:          { label: "Barby",        color: "#ef4444" },
   venue_levontin7:      { label: "Levontin 7",   color: "#06b6d4" },
   venue_hangar11:       { label: "Hangar 11",    color: "#10b981" },
+  venue_hameretz2:      { label: "Hameretz 2",   color: "#f59e0b" },
 };
 
 const CAT_EMOJI = {
-  music:    { dj_set:"🎧", live:"🎸", festival:"🎪", default:"🎵" },
+  music:    { dj_set:"🎧", live:"🎸", festival:"🎪", classical:"🎻", default:"🎵" },
   cultural: { tour:"🏛️", film:"🎬", pride:"🏳️‍🌈", festival:"🎉", lecture:"🎤", talk:"💬", meetup:"🤝", musical:"🎭", default:"✨" },
   art:      { exhibition:"🖼️", default:"🎨" },
   market:   { crafts:"🛍️", flea:"🪴", default:"🏪" },
   food:     { default:"🍽️" },
+  dance:    { default:"💃" },
+  standup:  { default:"🎤" },
 };
 
 function getEmoji(ev) {
@@ -82,10 +85,15 @@ function matchDate(ev, filter, dateRange) {
     return ev.event_date === dateRange.start;
   }
   if (filter === "all") return true;
-  const diff = Math.round((new Date(ev.event_date+"T00:00:00") - new Date(TODAY+"T00:00:00")) / 86400000);
+  const dt   = new Date(ev.event_date + "T00:00:00");
+  const diff = Math.round((dt - new Date(TODAY + "T00:00:00")) / 86400000);
   if (filter === "today")     return diff === 0;
   if (filter === "tomorrow")  return diff === 1;
-  if (filter === "weekend")   return diff >= 0 && diff <= 7;
+  if (filter === "weekend") {
+    // Thu=4, Fri=5, Sat=6 within next 9 days
+    const dow = dt.getDay();
+    return diff >= 0 && diff <= 9 && (dow === 4 || dow === 5 || dow === 6);
+  }
   if (filter === "next-week") return diff >= 7 && diff <= 14;
   return true;
 }
@@ -127,19 +135,20 @@ function ScoreBar({ label, value, color }) {
   );
 }
 
-function EventCard({ ev, onClick, compact }) {
+function EventCard({ ev, onLike, onDislike, isLiked, compact }) {
   const isToday = ev.event_date === TODAY;
   const emoji = getEmoji(ev);
   const [hover, setHover] = useState(false);
+  const url = ev.ticket_url || ev.source_url || "#";
 
   return (
-    <div
-      onClick={() => onClick(ev)}
+    <a href={url} target="_blank" rel="noopener noreferrer"
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
+        display:"block", textDecoration:"none",
         background: T.bg1, borderRadius:12, padding: compact ? "14px 16px" : "18px 20px",
-        border: `1px solid ${isToday ? "rgba(245,166,35,0.35)" : hover ? T.borderHover : T.border}`,
+        border: `1px solid ${isLiked ? "rgba(245,166,35,0.5)" : isToday ? "rgba(245,166,35,0.25)" : hover ? T.borderHover : T.border}`,
         cursor:"pointer", position:"relative", overflow:"hidden",
         transform: hover ? "translateY(-2px)" : "none",
         transition:"transform 0.15s, border-color 0.15s",
@@ -150,6 +159,22 @@ function EventCard({ ev, onClick, compact }) {
           <PulseRing />TODAY
         </div>
       )}
+
+      {/* Like / dislike buttons */}
+      <div style={{ position:"absolute", bottom:12, right:12, display:"flex", gap:4, zIndex:2 }}>
+        <button onClick={onLike}
+          style={{ background: isLiked ? T.amberDim : "rgba(0,0,0,0.3)", border: isLiked ? `1px solid ${T.amber}` : "1px solid transparent",
+                   borderRadius:"50%", width:26, height:26, cursor:"pointer", fontSize:13,
+                   display:"flex", alignItems:"center", justifyContent:"center", color: isLiked ? T.amber : T.textDim }}>
+          ♥
+        </button>
+        <button onClick={onDislike}
+          style={{ background:"rgba(0,0,0,0.3)", border:"1px solid transparent",
+                   borderRadius:"50%", width:26, height:26, cursor:"pointer", fontSize:13,
+                   display:"flex", alignItems:"center", justifyContent:"center", color: T.textDim }}>
+          ✕
+        </button>
+      </div>
 
       <div style={{ fontSize: compact ? 24 : 30, marginBottom:10 }}>{emoji}</div>
 
@@ -174,7 +199,7 @@ function EventCard({ ev, onClick, compact }) {
         </div>
       )}
 
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", paddingRight: compact ? 0 : 60 }}>
         <div>
           <div style={{ fontFamily:T.font, fontSize:12, color:T.amber, fontWeight:600 }}>
             {fmtDate(ev.event_date)}{ev.start_time ? ` · ${fmtTime(ev.start_time)}` : ""}
@@ -185,7 +210,7 @@ function EventCard({ ev, onClick, compact }) {
           {fmtPrice(ev)}
         </div>
       </div>
-    </div>
+    </a>
   );
 }
 
@@ -350,10 +375,13 @@ const I18N = {
     total:       n => `${n} total`,
     searchPlaceholder: "Search events, venues…",
     dates: { today:"Today", tomorrow:"Tomorrow", weekend:"Weekend", "next-week":"Next Week", all:"All" },
-    cats:  { all:"All", music:"Music", "dj-set":"DJ Sets", cultural:"Cultural", art:"Art", food:"Food", market:"Markets" },
+    cats:  { all:"All", music:"Shows", "dj-set":"Parties", classical:"Classical", cultural:"Cultural", talk:"Talks", film:"Movies", dance:"Dance", standup:"Stand Up", art:"Art", food:"Food", market:"Markets" },
+    freeOnly: "Free only",
+    forMe: "For You",
+    forMeEmpty: "Like events to get personalised picks",
     prices: { all:"All prices", free:"Free", paid:"Paid" },
     calTapDate: "Tap a date", calTapEnd: "Tap end date", calClear: "Clear", calDone: "Done",
-    calDays:   ["Mo","Tu","We","Th","Fr","Sa","Su"],
+    calDays:   ["Su","Mo","Tu","We","Th","Fr","Sa"],
     calMonths: ["January","February","March","April","May","June","July","August","September","October","November","December"],
     emptyState: "Nothing found — try \"Weekend\" or clear the filter",
     eventCount: n => `${n} event${n !== 1 ? "s" : ""}`,
@@ -378,10 +406,13 @@ const I18N = {
     total:       n => `סה״כ ${n}`,
     searchPlaceholder: "חיפוש אירועים, מקומות…",
     dates: { today:"היום", tomorrow:"מחר", weekend:"סוף שבוע", "next-week":"שבוע הבא", all:"הכל" },
-    cats:  { all:"הכל", music:"מוזיקה", "dj-set":"DJ", cultural:"תרבות", art:"אמנות", food:"אוכל", market:"שווקים" },
+    cats:  { all:"הכל", music:"הופעות", "dj-set":"מסיבות", classical:"קלאסי", cultural:"תרבות", talk:"שיחות", film:"קולנוע", dance:"מחול", standup:"סטנד-אפ", art:"אמנות", food:"אוכל", market:"שווקים" },
+    freeOnly: "חינם בלבד",
+    forMe: "בשבילי",
+    forMeEmpty: "אהב אירועים כדי לקבל המלצות",
     prices: { all:"כל המחירים", free:"חינם", paid:"בתשלום" },
     calTapDate: "בחר תאריך", calTapEnd: "בחר תאריך סיום", calClear: "נקה", calDone: "סגור",
-    calDays:   ["ב׳","ג׳","ד׳","ה׳","ו׳","ש׳","א׳"],
+    calDays:   ["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"],
     calMonths: ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"],
     emptyState: "לא נמצאו אירועים — נסה \"סוף שבוע\" או נקה את הסינון",
     eventCount: n => `${n} אירוע${n !== 1 ? "ים" : ""}`,
@@ -403,7 +434,7 @@ const I18N = {
 };
 
 // ── Mini Calendar ──────────────────────────────────────────────────────────
-const DAY_LABELS = ["Mo","Tu","We","Th","Fr","Sa","Su"];
+const DAY_LABELS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
 const MONTH_NAMES = ["January","February","March","April","May","June",
                      "July","August","September","October","November","December"];
 
@@ -418,7 +449,7 @@ function MiniCalendar({ range, onChange, onClose, lang = "en" }) {
   }
 
   function daysInMonth(y, m) { return new Date(y, m+1, 0).getDate(); }
-  function firstDow(y, m) { return (new Date(y, m, 1).getDay() + 6) % 7; } // Mon=0
+  function firstDow(y, m) { return new Date(y, m, 1).getDay(); } // Sun=0
 
   function handleDay(iso) {
     if (!range.start || (range.start && range.end)) {
@@ -523,56 +554,94 @@ const DATE_FILTERS = [
 ];
 
 const CATEGORIES = [
-  { id:"all",      label:"All",      emoji:"✦" },
-  { id:"music",    label:"Music",    emoji:"🎵" },
-  { id:"dj-set",   label:"DJ Sets",  emoji:"🎧" },
-  { id:"cultural", label:"Cultural", emoji:"✨" },
-  { id:"art",      label:"Art",      emoji:"🎨" },
-  { id:"food",     label:"Food",     emoji:"🍽️" },
-  { id:"market",   label:"Markets",  emoji:"🛍️" },
+  { id:"music",    emoji:"🎸" },
+  { id:"dj-set",   emoji:"🎧" },
+  { id:"classical",emoji:"🎻" },
+  { id:"dance",    emoji:"💃" },
+  { id:"standup",  emoji:"🎤" },
+  { id:"talk",     emoji:"💬" },
+  { id:"film",     emoji:"🎬" },
+  { id:"art",      emoji:"🎨" },
+  { id:"food",     emoji:"🍽️" },
+  { id:"market",   emoji:"🛍️" },
+  { id:"cultural", emoji:"✨" },
 ];
 
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
-  const [events,    setEvents]    = useState(DB.events);
-  const [loading,   setLoading]   = useState(true);
-  const [lang,      setLang]      = useState("en");
-  const [dateFil,   setDateFil]   = useState("weekend");
-  const [dateRange, setDateRange] = useState({ start: null, end: null });
-  const [calOpen,   setCalOpen]   = useState(false);
-  const [catFil,    setCatFil]    = useState("all");
-  const [priceFil,  setPriceFil]  = useState("all");
-  const [search,    setSearch]    = useState("");
-  const [selected,  setSelected]  = useState(null);
-  const [history,   setHistory]   = useState([]);
+  const [events,     setEvents]     = useState(DB.events);
+  const [sources,    setSources]    = useState([]);
+  const [lang,       setLang]       = useState("en");
+  const [dateFil,    setDateFil]    = useState("weekend");
+  const [dateRange,  setDateRange]  = useState({ start: null, end: null });
+  const [calOpen,    setCalOpen]    = useState(false);
+  const [activeCats, setActiveCats] = useState(new Set());
+  const [freeOnly,   setFreeOnly]   = useState(false);
+  const [search,     setSearch]     = useState("");
+  const [prefs,      setPrefs]      = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mytlv_prefs") || "{}"); }
+    catch { return {}; }
+  });
 
   const L = I18N[lang];
   const isRTL = lang === "he";
+  const liked    = useMemo(() => new Set(prefs.liked    || []), [prefs]);
+  const disliked = useMemo(() => new Set(prefs.disliked || []), [prefs]);
 
   useEffect(() => {
     fetch("/api/events")
       .then(r => r.json())
-      .then(d => { setEvents(d.events); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(d => { setEvents(d.events); setSources(d.sources || []); })
+      .catch(() => {});
   }, []);
 
-  function openEvent(ev)  { setSelected(ev); setHistory([]); }
-  function navSimilar(ev) { setHistory(h => [...h, selected]); setSelected(ev); }
-  function closeModal()   { setSelected(null); setHistory([]); }
+  function savePrefs(next) {
+    setPrefs(next);
+    localStorage.setItem("mytlv_prefs", JSON.stringify(next));
+  }
+
+  function toggleLike(ev, e) {
+    e.stopPropagation();
+    const next = { ...prefs,
+      liked:    [...(liked.has(ev.id)
+        ? new Set([...liked].filter(x => x !== ev.id))
+        : new Set([...liked, ev.id]))],
+      venues:   [...new Set([...(prefs.venues||[]), ...(liked.has(ev.id)?[]:[ev.venue_name].filter(Boolean))])],
+      cats:     [...new Set([...(prefs.cats||[]),   ...(liked.has(ev.id)?[]:[ev.category, ev.subcategory].filter(Boolean))])],
+    };
+    savePrefs(next);
+  }
+
+  function toggleDislike(ev, e) {
+    e.stopPropagation();
+    const d = new Set(prefs.disliked || []);
+    disliked.has(ev.id) ? d.delete(ev.id) : d.add(ev.id);
+    savePrefs({ ...prefs, disliked: [...d] });
+  }
+
+  function toggleCat(id) {
+    setActiveCats(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function evMatchesCat(ev, catId) {
+    const cats = ev.categories?.length ? ev.categories : [ev.category];
+    if (catId === "dj-set")    return ev.subcategory === "dj-set";
+    if (catId === "classical") return ev.category === "music" && ev.subcategory === "classical";
+    if (catId === "talk")      return ev.category === "cultural" && ev.subcategory === "talk";
+    if (catId === "film")      return ev.category === "cultural" && ev.subcategory === "film";
+    return cats.includes(catId);
+  }
 
   const filtered = useMemo(() => {
     return events.filter(ev => {
+      if (disliked.has(ev.id)) return false;
       if (!matchDate(ev, dateFil, dateRange)) return false;
-      if (catFil !== "all") {
-        const cats = ev.categories?.length ? ev.categories : [ev.category];
-        if (catFil === "dj-set") {
-          if (ev.subcategory !== "dj-set") return false;
-        } else if (!cats.includes(catFil)) {
-          return false;
-        }
-      }
-      if (priceFil === "free" && ev.price_min !== 0) return false;
-      if (priceFil === "paid" && ev.price_min === 0) return false;
+      if (activeCats.size > 0 && ![...activeCats].some(c => evMatchesCat(ev, c))) return false;
+      if (freeOnly && ev.price_min !== 0) return false;
       if (search) {
         const q = search.toLowerCase();
         return ev.title.toLowerCase().includes(q) ||
@@ -581,21 +650,54 @@ export default function App() {
           (ev.tags||[]).some(t => t.toLowerCase().includes(q));
       }
       return true;
-    }).sort((a,b) => {
-      if (a.event_date !== b.event_date) return a.event_date < b.event_date ? -1 : 1;
-      return (a.start_time||"") < (b.start_time||"") ? -1 : 1;
     });
-  }, [events, dateFil, dateRange, catFil, priceFil, search]);
+  }, [events, dateFil, dateRange, activeCats, freeOnly, search, disliked]);
 
-  // Group by date
+  // Group by date, sort within each day by venue's earliest event then by time
   const grouped = useMemo(() => {
-    const g = {};
+    const byDate = {};
     for (const ev of filtered) {
-      if (!g[ev.event_date]) g[ev.event_date] = [];
-      g[ev.event_date].push(ev);
+      if (!byDate[ev.event_date]) byDate[ev.event_date] = [];
+      byDate[ev.event_date].push(ev);
     }
-    return g;
+    for (const evs of Object.values(byDate)) {
+      const venueEarliest = {};
+      for (const ev of evs) {
+        const v = (ev.venue_name || "~");
+        if (!venueEarliest[v] || (ev.start_time||"") < venueEarliest[v])
+          venueEarliest[v] = ev.start_time || "";
+      }
+      evs.sort((a, b) => {
+        const va = venueEarliest[a.venue_name||"~"] || "";
+        const vb = venueEarliest[b.venue_name||"~"] || "";
+        if (va !== vb) return va < vb ? -1 : 1;
+        return (a.start_time||"") < (b.start_time||"") ? -1 : 1;
+      });
+    }
+    return byDate;
   }, [filtered]);
+
+  // "For You" recommendations
+  const forMe = useMemo(() => {
+    if (liked.size === 0 && !(prefs.venues||[]).length && !(prefs.cats||[]).length) return [];
+    const likedVenues = new Set(prefs.venues || []);
+    const likedCats   = new Set(prefs.cats   || []);
+    return events
+      .filter(e => !liked.has(e.id) && !disliked.has(e.id) && e.event_date >= TODAY)
+      .map(e => {
+        let score = 0;
+        for (const lid of liked) {
+          const sim = SIM_INDEX[lid]?.[e.id] ?? SIM_INDEX[e.id]?.[lid] ?? null;
+          if (sim) score += (sim.score_composite || 0) * 8;
+        }
+        if (e.venue_name && likedVenues.has(e.venue_name)) score += 5;
+        if (likedCats.has(e.category) || likedCats.has(e.subcategory))  score += 3;
+        return { ...e, _score: score };
+      })
+      .filter(e => e._score > 0.5)
+      .sort((a, b) => b._score - a._score)
+      .slice(0, 8);
+  }, [events, liked, disliked, prefs]);
 
   const todayCount = events.filter(e => e.event_date === TODAY).length;
 
@@ -644,7 +746,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Date strip + price */}
+          {/* Date strip */}
           <div style={{ display:"flex", gap:5, alignItems:"center", overflowX:"auto", paddingBottom:12, scrollbarWidth:"none" }}>
             {DATE_FILTERS.map(df => (
               <button key={df.id} onClick={()=>{ setDateFil(df.id); setDateRange({start:null,end:null}); setCalOpen(false); }} style={{
@@ -654,7 +756,6 @@ export default function App() {
                 fontFamily:T.font, fontSize:11, fontWeight: !dateRange.start && dateFil===df.id ? 700 : 500, cursor:"pointer",
               }}>{L.dates[df.id]}</button>
             ))}
-            {/* Calendar toggle */}
             <button onClick={()=>setCalOpen(o=>!o)} style={{
               padding:"5px 10px", borderRadius:6, border:"none", whiteSpace:"nowrap", flexShrink:0,
               background: dateRange.start ? T.amber : calOpen ? T.bg2 : "transparent",
@@ -667,54 +768,74 @@ export default function App() {
                     : dateRange.start.slice(5))
                 : "📅"}
             </button>
-            <div style={{ marginInlineStart:"auto", display:"flex", gap:4 }}>
-              {["all","free","paid"].map(p => (
-                <button key={p} onClick={()=>setPriceFil(p)} style={{
-                  padding:"5px 10px", borderRadius:6, border:"none",
-                  background: priceFil===p ? T.teal : "transparent",
-                  color: priceFil===p ? T.tealBright : T.textDim,
-                  fontFamily:T.font, fontSize:10, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap",
-                }}>
-                  {L.prices[p]}
-                </button>
-              ))}
-            </div>
+            {/* Free-only toggle */}
+            <button onClick={()=>setFreeOnly(f=>!f)} style={{
+              marginInlineStart:"auto", padding:"5px 11px", borderRadius:6, border:"none", flexShrink:0,
+              background: freeOnly ? T.green+"22" : "transparent",
+              color: freeOnly ? T.green : T.textDim,
+              fontFamily:T.font, fontSize:10, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap",
+            }}>
+              {freeOnly ? "✓ " : ""}{L.freeOnly}
+            </button>
           </div>
           {calOpen && (
-            <MiniCalendar
-              range={dateRange}
+            <MiniCalendar range={dateRange}
               onChange={r=>{ setDateRange(r); if(r.start) setDateFil("all"); }}
-              onClose={()=>setCalOpen(false)}
-              lang={lang}
-            />
+              onClose={()=>setCalOpen(false)} lang={lang} />
           )}
 
-          {/* Category pills */}
+          {/* Category pills — multi-select */}
           <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:14, scrollbarWidth:"none" }}>
-            {CATEGORIES.map(c => (
-              <button key={c.id} onClick={()=>setCatFil(c.id)} style={{
-                display:"flex", alignItems:"center", gap:5, padding:"7px 14px", borderRadius:100, border:"none", whiteSpace:"nowrap",
-                background: catFil===c.id ? T.amberDim : "transparent",
-                border: catFil===c.id ? `1.5px solid ${T.amber}` : `1.5px solid ${T.border}`,
-                color: catFil===c.id ? T.amber : T.textMid,
-                fontFamily:T.font, fontSize:12, fontWeight: catFil===c.id ? 700 : 500, cursor:"pointer",
-              }}>
-                <span>{c.emoji}</span>{L.cats[c.id]}
-              </button>
-            ))}
-
-            {/* Source legend */}
-            <div style={{ marginInlineStart:"auto", display:"flex", gap:6, alignItems:"center", flexShrink:0 }}>
-              {Object.entries(SOURCE_META).slice(0,4).map(([k,v]) => (
-                <span key={k} style={{ fontSize:9, fontFamily:T.font, fontWeight:700, color:v.color, background:v.color+"15", padding:"3px 7px", borderRadius:4 }}>{v.label}</span>
-              ))}
-            </div>
+            {/* All button */}
+            <button onClick={()=>setActiveCats(new Set())} style={{
+              display:"flex", alignItems:"center", gap:4, padding:"6px 13px", borderRadius:100, border:"none", whiteSpace:"nowrap", flexShrink:0,
+              background: activeCats.size===0 ? T.amberDim : "transparent",
+              outline: activeCats.size===0 ? `1.5px solid ${T.amber}` : `1.5px solid ${T.border}`,
+              color: activeCats.size===0 ? T.amber : T.textMid,
+              fontFamily:T.font, fontSize:12, fontWeight: activeCats.size===0 ? 700 : 500, cursor:"pointer",
+            }}>✦ {L.cats.all}</button>
+            {CATEGORIES.map(c => {
+              const on = activeCats.has(c.id);
+              return (
+                <button key={c.id} onClick={()=>toggleCat(c.id)} style={{
+                  display:"flex", alignItems:"center", gap:4, padding:"6px 13px", borderRadius:100, border:"none", whiteSpace:"nowrap", flexShrink:0,
+                  background: on ? T.amberDim : "transparent",
+                  outline: on ? `1.5px solid ${T.amber}` : `1.5px solid ${T.border}`,
+                  color: on ? T.amber : T.textMid,
+                  fontFamily:T.font, fontSize:12, fontWeight: on ? 700 : 500, cursor:"pointer",
+                }}>
+                  <span>{c.emoji}</span>{L.cats[c.id]}
+                </button>
+              );
+            })}
           </div>
         </div>
       </header>
 
       {/* ── Main content ── */}
       <main style={{ maxWidth:1100, margin:"0 auto", padding:"24px 24px 60px" }}>
+
+        {/* ── For You ── */}
+        {forMe.length > 0 && (
+          <div style={{ marginBottom:36 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
+              <div style={{ fontFamily:T.font, fontSize:13, fontWeight:700, color:"#a78bfa", letterSpacing:"0.06em" }}>
+                ✦ {L.forMe}
+              </div>
+              <div style={{ flex:1, height:1, background:T.border }} />
+            </div>
+            <div style={{ display:"flex", gap:10, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none" }}>
+              {forMe.map(ev => (
+                <div key={ev.id} style={{ minWidth:220, maxWidth:220, flexShrink:0 }}>
+                  <EventCard ev={ev} compact
+                    isLiked={liked.has(ev.id)}
+                    onLike={e=>toggleLike(ev,e)}
+                    onDislike={e=>toggleDislike(ev,e)} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {filtered.length === 0 ? (
           <div style={{ textAlign:"center", padding:"80px 0", color:T.textDim, fontFamily:T.font, fontSize:15 }}>
@@ -724,7 +845,6 @@ export default function App() {
         ) : (
           Object.entries(grouped).map(([dateKey, evs]) => (
             <div key={dateKey} style={{ marginBottom:32 }}>
-              {/* Date section header */}
               <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
                 <div style={{ fontFamily:T.font, fontSize:13, fontWeight:700, color:T.amber, letterSpacing:"0.06em" }}>
                   {(() => {
@@ -740,37 +860,35 @@ export default function App() {
                 <div style={{ flex:1, height:1, background:T.border }} />
                 <div style={{ fontFamily:T.body, fontSize:10, color:T.textDim }}>{L.eventCount(evs.length)}</div>
               </div>
-
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))", gap:12 }}>
-                {evs.map(ev => <EventCard key={ev.id} ev={ev} onClick={openEvent} />)}
+                {evs.map(ev => (
+                  <EventCard key={ev.id} ev={ev}
+                    isLiked={liked.has(ev.id)}
+                    onLike={e=>toggleLike(ev,e)}
+                    onDislike={e=>toggleDislike(ev,e)} />
+                ))}
               </div>
             </div>
           ))
         )}
 
-        {/* Data sources footer */}
+        {/* Data sources footer — auto-generated from API */}
         <div style={{ marginTop:48, borderTop:`1px solid ${T.border}`, paddingTop:24 }}>
           <div style={{ fontFamily:T.font, fontSize:10, color:T.textDim, letterSpacing:"0.08em", marginBottom:12 }}>{L.dataSources}</div>
           <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            {[
-              ["Secret Tel Aviv",    "🟢 Tribe REST API",    "#e879f9"],
-              ["Entrio",             "🟢 HTML scraper",      "#6366f1"],
-              ["Bandsintown",        "🟢 REST API",          "#22c55e"],
-              ["TLV Municipality",   "🟡 HTML scraper",      "#a855f7"],
-              ["Facebook Events",    "🔴 Planned",           "#3b82f6"],
-              ["Ticketmaster IL",    "🟡 REST API",          "#0ea5e9"],
-            ].map(([name, status, color]) => (
-              <div key={name} style={{ background:T.bg1, border:`1px solid ${T.border}`, borderRadius:8, padding:"9px 13px" }}>
-                <div style={{ fontFamily:T.font, fontSize:11, color:T.text, fontWeight:600, marginBottom:2 }}>{name}</div>
-                <div style={{ fontFamily:T.body, fontSize:9, color:T.textDim }}>{status}</div>
-              </div>
-            ))}
+            {(sources.length ? sources : Object.keys(SOURCE_META)).map(src => {
+              const m = SOURCE_META[src] || { label: src, color: T.textDim };
+              return (
+                <div key={src} style={{ background:T.bg1, border:`1px solid ${T.border}`, borderRadius:8, padding:"8px 12px",
+                                        display:"flex", alignItems:"center", gap:7 }}>
+                  <span style={{ width:7, height:7, borderRadius:"50%", background:m.color, display:"inline-block", flexShrink:0 }} />
+                  <span style={{ fontFamily:T.font, fontSize:11, color:T.text, fontWeight:600 }}>{m.label}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </main>
-
-      {/* ── Modal ── */}
-      {selected && <Modal ev={selected} events={events} onClose={closeModal} onNavigate={navSimilar} lang={lang} />}
     </div>
   );
 }

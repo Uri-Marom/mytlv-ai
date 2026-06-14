@@ -48,6 +48,15 @@ VENUES = {
         "subcategory":  "live",
         "strategy":     "html",
     },
+    "hameretz2": {
+        "label":        "Hameretz 2",
+        "url":          "https://hameretz2.org",
+        "events_url":   "https://hameretz2.org",
+        "neighborhood": "South TLV",
+        "category":     "cultural",
+        "subcategory":  "general",
+        "strategy":     "playwright",
+    },
 }
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -319,9 +328,140 @@ def _scrape_hangar11(cfg) -> list[VenueEvent]:
 
 # ── Playwright runner ────────────────────────────────────────────────────────
 
+def _scrape_hameretz2(page, cfg) -> list[VenueEvent]:
+    log.info("Hameretz 2: loading page...")
+    page.goto(cfg["events_url"], timeout=25000, wait_until="domcontentloaded")
+    time.sleep(3)
+
+    # DOM structure: [link][img?][date text DD.MM][title][description…][next link]
+    # Walk the DOM in document order to collect (link, img, text_after) tuples.
+    dom_items = page.evaluate("""() => {
+        const out = [];
+        const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT
+        );
+        let node;
+        while (node = walker.nextNode()) {
+            if (node.nodeType === 3) {
+                const t = node.textContent.trim();
+                if (t && t.length < 500 && !t.startsWith('//') && !t.includes('{')) {
+                    out.push({type:'text', val:t});
+                }
+            } else if (node.nodeType === 1) {
+                if (node.tagName === 'A' && (node.href||'').includes('tickets.hameretz2.org/event/'))
+                    out.push({type:'link', href:node.href});
+                else if (node.tagName === 'IMG' && node.src && node.src.includes('http'))
+                    out.push({type:'img', src:node.src});
+            }
+        }
+        return out;
+    }""")
+
+    # Group: each link starts a new event; collect text until the next link
+    raw_groups = []
+    current = None
+    for item in dom_items:
+        if item['type'] == 'link':
+            if current: raw_groups.append(current)
+            current = {'href': item['href'], 'texts': [], 'img': None}
+        elif current is not None:
+            if item['type'] == 'img' and not current['img']:
+                current['img'] = item['src']
+            elif item['type'] == 'text':
+                current['texts'].append(item['val'])
+    if current: raw_groups.append(current)
+
+    items = [{'href': g['href'], 'lines': g['texts'][:8], 'img': g['img']}
+             for g in raw_groups if g['texts']]
+
+    log.info(f"Hameretz 2: found {len(items)} items")
+    events = []
+    seen = set()
+
+    FILM_KEYWORDS = re.compile(
+        r"סרט|קולנוע|film|screening|cinema|movie|🎬|🎞|director|הקרנה", re.I)
+    STANDUP_KEYWORDS = re.compile(
+        r"stand.?up|קומדי|ערסים|comedy|comedian|סטנד", re.I)
+    CLASSICAL_KEYWORDS = re.compile(
+        r"quartet|orchestra|symphon|classical|philharmon|רביעייה|תזמורת", re.I)
+
+    for item in items:
+        href = item.get("href", "")
+        lines = item.get("lines", [])
+        if not lines: continue
+
+        # Extract ticket ID as source_id
+        m_id = re.search(r"/event/(\d+)", href)
+        source_id = m_id.group(1) if m_id else _slugify(lines[0] if lines else "")
+        if source_id in seen: continue
+        seen.add(source_id)
+
+        # Date: look for DD.MM pattern
+        ev_date, title, description = None, "", ""
+        for i, line in enumerate(lines):
+            m_date = re.search(r"(\d{1,2})\.(\d{2})", line)
+            if m_date and not ev_date:
+                day, month = int(m_date.group(1)), int(m_date.group(2))
+                year = date.today().year
+                if month < date.today().month - 1:
+                    year += 1
+                try:
+                    ev_date = date(year, month, day)
+                    # Title is the next non-empty line after the date
+                    for j in range(i + 1, min(i + 4, len(lines))):
+                        if lines[j] and not re.search(r"^\d{1,2}\.\d{2}", lines[j]):
+                            title = lines[j]
+                            # Description is the next lines
+                            desc_parts = [l for l in lines[j+1:j+3] if l and len(l) > 5]
+                            description = " ".join(desc_parts)[:300]
+                            break
+                except ValueError:
+                    pass
+
+        if not ev_date or not title: continue
+
+        # Category inference from title + description
+        combined = f"{title} {description}"
+        if FILM_KEYWORDS.search(combined):
+            category, subcategory = "cultural", "film"
+        elif STANDUP_KEYWORDS.search(combined):
+            category, subcategory = "standup", "standup"
+        elif CLASSICAL_KEYWORDS.search(combined):
+            category, subcategory = "music", "classical"
+        else:
+            category, subcategory = "music", "live"
+
+        categories = _derive_categories(category, subcategory)
+
+        events.append(VenueEvent(
+            source="venue_hameretz2",
+            source_id=source_id,
+            title=title,
+            venue_name=cfg["label"],
+            neighborhood=cfg["neighborhood"],
+            category=category,
+            subcategory=subcategory,
+            event_date=ev_date,
+            start_time=None,
+            end_time=None,
+            image_url=item.get("img"),
+            ticket_url=href,
+            source_url=href,
+            description=description,
+            tags=[subcategory.title()] if subcategory not in ("general", "live") else ["Live Music"],
+        ))
+
+    log.info(f"Hameretz 2: {len(events)} events parsed")
+    return events
+
+
+# ── Playwright runner ────────────────────────────────────────────────────────
+
 PW_SCRAPERS = {
     "barby":     _scrape_barby,
     "levontin7": _scrape_levontin7,
+    "hameretz2": _scrape_hameretz2,
 }
 
 def scrape_playwright_venues(venue_ids) -> list[VenueEvent]:
