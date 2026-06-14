@@ -17,7 +17,7 @@ const SIM_INDEX = (() => {
 })();
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-const TODAY = "2026-06-14";
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const SOURCE_META = {
   secret_tel_aviv:      { label: "Secret TLV",  color: "#e879f9" },
@@ -55,9 +55,9 @@ function fmtPrice(ev) {
   return `₪${ev.price_min}`;
 }
 
-function getSimilar(eventId, n = 5) {
+function getSimilar(events, eventId, n = 5) {
   const row = SIM_INDEX[eventId] || {};
-  return EVENTS
+  return events
     .filter(e => e.id !== eventId && row[e.id])
     .sort((a,b) => row[b.id].score_composite - row[a.id].score_composite)
     .slice(0, n)
@@ -206,10 +206,10 @@ function SimilarMini({ ev, onClick }) {
   );
 }
 
-function Modal({ ev, onClose, onNavigate }) {
+function Modal({ ev, events, onClose, onNavigate }) {
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [pinned, setPinned] = useState(null);
-  const similar = useMemo(() => getSimilar(ev.id), [ev.id]);
+  const similar = useMemo(() => getSimilar(events, ev.id), [events, ev.id]);
   const emoji = getEmoji(ev);
 
   useEffect(() => { setPinned(null); setShowBreakdown(false); }, [ev.id]);
@@ -277,7 +277,7 @@ function Modal({ ev, onClose, onNavigate }) {
 
             {showBreakdown && pinned !== null && (() => {
               const s = SIM_INDEX[ev.id]?.[pinned] || {};
-              const pinnedEv = EVENTS.find(e => e.id === pinned);
+              const pinnedEv = events.find(e => e.id === pinned);
               return (
                 <div style={{ background:T.bg0, border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px", marginBottom:12 }}>
                   <div style={{ fontFamily:T.font, fontSize:10, color:T.textDim, letterSpacing:"0.06em", marginBottom:10 }}>
@@ -333,6 +333,8 @@ const CATEGORIES = [
 
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
+  const [events,   setEvents]   = useState(DB.events);
+  const [loading,  setLoading]  = useState(true);
   const [dateFil,  setDateFil]  = useState("weekend");
   const [catFil,   setCatFil]   = useState("all");
   const [priceFil, setPriceFil] = useState("all");
@@ -340,12 +342,19 @@ export default function App() {
   const [selected, setSelected] = useState(null);
   const [history,  setHistory]  = useState([]);
 
+  useEffect(() => {
+    fetch("/api/events")
+      .then(r => r.json())
+      .then(d => { setEvents(d.events); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
   function openEvent(ev)  { setSelected(ev); setHistory([]); }
   function navSimilar(ev) { setHistory(h => [...h, selected]); setSelected(ev); }
   function closeModal()   { setSelected(null); setHistory([]); }
 
   const filtered = useMemo(() => {
-    return EVENTS.filter(ev => {
+    return events.filter(ev => {
       if (!matchDate(ev, dateFil)) return false;
       if (catFil === "dj-set" && ev.subcategory !== "dj-set") return false;
       if (catFil !== "all" && catFil !== "dj-set" && ev.category !== catFil) return false;
@@ -363,7 +372,7 @@ export default function App() {
       if (a.event_date !== b.event_date) return a.event_date < b.event_date ? -1 : 1;
       return (a.start_time||"") < (b.start_time||"") ? -1 : 1;
     });
-  }, [dateFil, catFil, priceFil, search]);
+  }, [events, dateFil, catFil, priceFil, search]);
 
   // Group by date
   const grouped = useMemo(() => {
@@ -375,7 +384,7 @@ export default function App() {
     return g;
   }, [filtered]);
 
-  const todayCount = EVENTS.filter(e => e.event_date === TODAY).length;
+  const todayCount = events.filter(e => e.event_date === TODAY).length;
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg0, color:T.text, fontFamily:T.body }}>
@@ -400,7 +409,7 @@ export default function App() {
                 my<span style={{ color:T.amber }}>tlv</span><span style={{ color:T.textDim, fontSize:17 }}>.ai</span>
               </div>
               <div style={{ fontSize:10, color:T.textDim, fontFamily:T.body, marginTop:3 }}>
-                Tel Aviv · <span style={{ color:T.amber }}>{todayCount}</span> events today · {EVENTS.length} total
+                Tel Aviv · <span style={{ color:T.amber }}>{todayCount}</span> events today · {events.length} total
               </div>
             </div>
 
@@ -510,7 +519,7 @@ export default function App() {
       </main>
 
       {/* ── Modal ── */}
-      {selected && <Modal ev={selected} onClose={closeModal} onNavigate={navSimilar} />}
+      {selected && <Modal ev={selected} events={events} onClose={closeModal} onNavigate={navSimilar} />}
     </div>
   );
 }
