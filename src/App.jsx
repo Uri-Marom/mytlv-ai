@@ -39,13 +39,13 @@ function getEmoji(ev) {
   return catMap[sub] || catMap.default || "📌";
 }
 
-function fmtDate(d) {
+function fmtDate(d, lang = "en") {
   if (!d) return "";
   const dt = new Date(d + "T00:00:00");
   const days = Math.round((dt - new Date(TODAY + "T00:00:00")) / 86400000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return dt.toLocaleDateString("en-IL", { weekday:"short", month:"short", day:"numeric" });
+  if (days === 0) return lang === "he" ? "היום" : "Today";
+  if (days === 1) return lang === "he" ? "מחר" : "Tomorrow";
+  return dt.toLocaleDateString(lang === "he" ? "he-IL" : "en-IL", { weekday:"short", month:"short", day:"numeric" });
 }
 
 function fmtPrice(ev) {
@@ -210,7 +210,8 @@ function SimilarMini({ ev, onClick }) {
   );
 }
 
-function Modal({ ev, events, onClose, onNavigate }) {
+function Modal({ ev, events, onClose, onNavigate, lang = "en" }) {
+  const L = I18N[lang];
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [pinned, setPinned] = useState(null);
   const similar = useMemo(() => getSimilar(events, ev.id), [events, ev.id]);
@@ -229,7 +230,7 @@ function Modal({ ev, events, onClose, onNavigate }) {
           <div style={{ fontSize:42, marginBottom:14 }}>{emoji}</div>
           <div style={{ fontFamily:T.font, fontSize:20, fontWeight:700, color:T.text, lineHeight:1.25, marginBottom:8 }}>{ev.title}</div>
 
-          {ev.event_date === TODAY && <div style={{ display:"flex", alignItems:"center", marginBottom:12 }}><PulseRing /><span style={{ color:T.amber, fontSize:10, fontFamily:T.font, fontWeight:700, letterSpacing:"0.08em" }}>HAPPENING TODAY</span></div>}
+          {ev.event_date === TODAY && <div style={{ display:"flex", alignItems:"center", marginBottom:12 }}><PulseRing /><span style={{ color:T.amber, fontSize:10, fontFamily:T.font, fontWeight:700, letterSpacing:"0.08em" }}>{L.happeningToday}</span></div>}
 
           {ev.description && <div style={{ fontFamily:T.body, fontSize:13, color:T.textMid, marginBottom:16, lineHeight:1.6 }}>{ev.description}</div>}
 
@@ -254,14 +255,14 @@ function Modal({ ev, events, onClose, onNavigate }) {
 
           <div style={{ display:"flex", gap:10, marginBottom:14 }}>
             <a href={ev.ticket_url || ev.source_url || "#"} target="_blank" rel="noopener noreferrer" style={{ flex:1, padding:"11px 0", background:T.amber, border:"none", borderRadius:8, fontFamily:T.font, fontSize:14, fontWeight:700, color:T.bg0, cursor:"pointer", textAlign:"center", textDecoration:"none", display:"block" }}>
-              {ev.ticket_url ? "Get Tickets →" : "More Info →"}
+              {ev.ticket_url ? L.getTickets : L.moreInfo}
             </a>
             <button style={{ padding:"11px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, fontFamily:T.font, fontSize:14, color:T.textMid, cursor:"pointer" }}>♥</button>
           </div>
 
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
             <Badge source={ev.source} />
-            {ev.source_url && <a href={ev.source_url} target="_blank" rel="noopener noreferrer" style={{ fontSize:10, color:T.textDim, fontFamily:T.body, textDecoration:"none" }}>View on {SOURCE_META[ev.source]?.label || ev.source} ↗</a>}
+            {ev.source_url && <a href={ev.source_url} target="_blank" rel="noopener noreferrer" style={{ fontSize:10, color:T.textDim, fontFamily:T.body, textDecoration:"none" }}>{L.viewOn(SOURCE_META[ev.source]?.label || ev.source)}</a>}
           </div>
         </div>
 
@@ -269,14 +270,14 @@ function Modal({ ev, events, onClose, onNavigate }) {
         {similar.length > 0 && (
           <div style={{ borderTop:`1px solid ${T.border}`, padding:"18px 28px 26px" }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4 }}>
-              <div style={{ fontFamily:T.font, fontSize:12, fontWeight:700, color:T.text, letterSpacing:"0.06em" }}>EVENTS LIKE THIS</div>
+              <div style={{ fontFamily:T.font, fontSize:12, fontWeight:700, color:T.text, letterSpacing:"0.06em" }}>{L.eventsLikeThis}</div>
               <button onClick={() => setShowBreakdown(v=>!v)} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:5, padding:"2px 8px", fontFamily:T.body, fontSize:9, color:T.textDim, cursor:"pointer" }}>
-                {showBreakdown ? "hide" : "why?"}
+                {showBreakdown ? L.hide : L.why}
               </button>
             </div>
 
             <div style={{ fontSize:10, color:T.textDim, fontFamily:T.body, marginBottom:12 }}>
-              Ranked by Facebook audience overlap + venue + timing signals
+              {L.rankedBy}
             </div>
 
             {showBreakdown && pinned !== null && (() => {
@@ -285,19 +286,19 @@ function Modal({ ev, events, onClose, onNavigate }) {
               return (
                 <div style={{ background:T.bg0, border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px", marginBottom:12 }}>
                   <div style={{ fontFamily:T.font, fontSize:10, color:T.textDim, letterSpacing:"0.06em", marginBottom:10 }}>
-                    MATCH BREAKDOWN · {pinnedEv?.title?.slice(0,30)}
+                    {L.matchBreakdown} · {pinnedEv?.title?.slice(0,30)}
                   </div>
-                  <ScoreBar label={"👥 User overlap (Jaccard)"}          value={s.score_user_overlap||0} color="#6366f1" />
-                  <ScoreBar label="📍 Venue / neighborhood"              value={s.score_venue||0}        color="#22c55e" />
-                  <ScoreBar label="🕐 Temporal pattern"                  value={s.score_temporal||0}     color="#0ea5e9" />
-                  <ScoreBar label="🎭 Scene / subcategory"               value={s.score_organizer||0}    color="#a855f7" />
+                  <ScoreBar label={L.scoreUserOverlap} value={s.score_user_overlap||0} color="#6366f1" />
+                  <ScoreBar label={L.scoreVenue}       value={s.score_venue||0}        color="#22c55e" />
+                  <ScoreBar label={L.scoreTemporal}    value={s.score_temporal||0}     color="#0ea5e9" />
+                  <ScoreBar label={L.scoreOrganizer}   value={s.score_organizer||0}    color="#a855f7" />
                   <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:8, marginTop:8, display:"flex", justifyContent:"space-between" }}>
-                    <span style={{ fontSize:10, color:T.textDim, fontFamily:T.body }}>Weighted composite × confidence</span>
+                    <span style={{ fontSize:10, color:T.textDim, fontFamily:T.body }}>{L.weightedComposite}</span>
                     <span style={{ fontSize:12, color:T.amber, fontFamily:T.font, fontWeight:700 }}>{Math.round((s.score_composite||0)*100)}%</span>
                   </div>
                   {s.overlap_user_count !== undefined && (
                     <div style={{ fontSize:9, color:T.textDim, fontFamily:T.body, marginTop:5 }}>
-                      {s.overlap_user_count} shared Facebook users in sample
+                      {L.sharedUsers(s.overlap_user_count)}
                     </div>
                   )}
                 </div>
@@ -318,12 +319,73 @@ function Modal({ ev, events, onClose, onNavigate }) {
   );
 }
 
+// ── Translations ───────────────────────────────────────────────────────────
+const I18N = {
+  en: {
+    langToggle: "עב",
+    eventsToday: n => `${n} events today`,
+    total:       n => `${n} total`,
+    searchPlaceholder: "Search events, venues…",
+    dates: { today:"Today", tomorrow:"Tomorrow", weekend:"Weekend", "next-week":"Next Week", all:"All" },
+    cats:  { all:"All", music:"Music", "dj-set":"DJ Sets", cultural:"Cultural", market:"Markets" },
+    prices: { all:"All prices", free:"Free", paid:"Paid" },
+    calTapDate: "Tap a date", calTapEnd: "Tap end date", calClear: "Clear", calDone: "Done",
+    calDays:   ["Mo","Tu","We","Th","Fr","Sa","Su"],
+    calMonths: ["January","February","March","April","May","June","July","August","September","October","November","December"],
+    emptyState: "Nothing found — try \"Weekend\" or clear the filter",
+    eventCount: n => `${n} event${n !== 1 ? "s" : ""}`,
+    happeningToday: "HAPPENING TODAY",
+    getTickets: "Get Tickets →", moreInfo: "More Info →",
+    viewOn: src => `View on ${src} ↗`,
+    eventsLikeThis: "EVENTS LIKE THIS",
+    why: "why?", hide: "hide",
+    matchBreakdown: "MATCH BREAKDOWN",
+    rankedBy: "Ranked by audience overlap + venue + timing signals",
+    weightedComposite: "Weighted composite × confidence",
+    sharedUsers: n => `${n} shared users in sample`,
+    scoreUserOverlap: "👥 User overlap (Jaccard)",
+    scoreVenue:      "📍 Venue / neighborhood",
+    scoreTemporal:   "🕐 Temporal pattern",
+    scoreOrganizer:  "🎭 Scene / subcategory",
+    dataSources: "DATA SOURCES",
+  },
+  he: {
+    langToggle: "EN",
+    eventsToday: n => `${n} אירועים היום`,
+    total:       n => `סה״כ ${n}`,
+    searchPlaceholder: "חיפוש אירועים, מקומות…",
+    dates: { today:"היום", tomorrow:"מחר", weekend:"סוף שבוע", "next-week":"שבוע הבא", all:"הכל" },
+    cats:  { all:"הכל", music:"מוזיקה", "dj-set":"DJ", cultural:"תרבות", market:"שווקים" },
+    prices: { all:"כל המחירים", free:"חינם", paid:"בתשלום" },
+    calTapDate: "בחר תאריך", calTapEnd: "בחר תאריך סיום", calClear: "נקה", calDone: "סגור",
+    calDays:   ["ב׳","ג׳","ד׳","ה׳","ו׳","ש׳","א׳"],
+    calMonths: ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"],
+    emptyState: "לא נמצאו אירועים — נסה \"סוף שבוע\" או נקה את הסינון",
+    eventCount: n => `${n} אירוע${n !== 1 ? "ים" : ""}`,
+    happeningToday: "קורה היום",
+    getTickets: "← לרכישת כרטיסים", moreInfo: "← פרטים נוספים",
+    viewOn: src => `${src} ↗`,
+    eventsLikeThis: "אירועים דומים",
+    why: "למה?", hide: "הסתר",
+    matchBreakdown: "פירוט ההתאמה",
+    rankedBy: "מדורג לפי חפיפת קהל, מיקום וזמן",
+    weightedComposite: "ציון מורכב × ביטחון",
+    sharedUsers: n => `${n} משתמשים משותפים`,
+    scoreUserOverlap: "👥 חפיפת קהל (Jaccard)",
+    scoreVenue:      "📍 מקום / שכונה",
+    scoreTemporal:   "🕐 דפוס זמן",
+    scoreOrganizer:  "🎭 סצנה / קטגוריה",
+    dataSources: "מקורות מידע",
+  },
+};
+
 // ── Mini Calendar ──────────────────────────────────────────────────────────
 const DAY_LABELS = ["Mo","Tu","We","Th","Fr","Sa","Su"];
 const MONTH_NAMES = ["January","February","March","April","May","June",
                      "July","August","September","October","November","December"];
 
-function MiniCalendar({ range, onChange, onClose }) {
+function MiniCalendar({ range, onChange, onClose, lang = "en" }) {
+  const CL = I18N[lang];
   const now = new Date(TODAY + "T00:00:00");
   const [view, setView] = useState({ y: now.getFullYear(), m: now.getMonth() });
   const [picking, setPicking] = useState(null); // "start" awaiting end click
@@ -367,7 +429,7 @@ function MiniCalendar({ range, onChange, onClose }) {
         <button onClick={()=>setView(v=>v.m===0?{y:v.y-1,m:11}:{y:v.y,m:v.m-1})}
           style={{ background:"none", border:"none", color:T.textMid, cursor:"pointer", fontSize:16, padding:"0 4px" }}>‹</button>
         <span style={{ fontFamily:T.font, fontSize:12, fontWeight:700, color:T.text }}>
-          {MONTH_NAMES[m]} {y}
+          {CL.calMonths[m]} {y}
         </span>
         <button onClick={()=>setView(v=>v.m===11?{y:v.y+1,m:0}:{y:v.y,m:v.m+1})}
           style={{ background:"none", border:"none", color:T.textMid, cursor:"pointer", fontSize:16, padding:"0 4px" }}>›</button>
@@ -375,7 +437,7 @@ function MiniCalendar({ range, onChange, onClose }) {
 
       {/* Day labels */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2, marginBottom:4 }}>
-        {DAY_LABELS.map(d => (
+        {CL.calDays.map(d => (
           <div key={d} style={{ textAlign:"center", fontFamily:T.font, fontSize:9,
                                 color:T.textDim, fontWeight:600 }}>{d}</div>
         ))}
@@ -392,14 +454,14 @@ function MiniCalendar({ range, onChange, onClose }) {
           const isPast  = iso < TODAY;
           const isToday = iso === TODAY;
           return (
-            <button key={i} onClick={()=>!isPast && handleDay(iso)}
+            <button key={i} onClick={()=>handleDay(iso)}
               style={{
-                padding:"5px 0", borderRadius:6, border:"none", cursor: isPast ? "default" : "pointer",
+                padding:"5px 0", borderRadius:6, border:"none", cursor:"pointer",
                 fontFamily:T.body, fontSize:11, fontWeight: isStart||isEnd ? 700 : 400,
                 background: isStart||isEnd ? T.amber : isIn ? T.amberDim : "transparent",
                 color: isStart||isEnd ? T.bg0 : isPast ? T.textDim : isToday ? T.amber : T.text,
                 outline: isToday && !isStart ? `1px solid ${T.amber}` : "none",
-                opacity: isPast ? 0.4 : 1,
+                opacity: isPast ? 0.6 : 1,
               }}>{d}</button>
           );
         })}
@@ -408,20 +470,20 @@ function MiniCalendar({ range, onChange, onClose }) {
       {/* Footer */}
       <div style={{ marginTop:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
         <span style={{ fontFamily:T.body, fontSize:10, color:T.textMid }}>
-          {range.start && !range.end ? "Tap end date" :
+          {range.start && !range.end ? CL.calTapEnd :
            range.start && range.end && range.start===range.end ? range.start :
-           range.start && range.end ? `${range.start} → ${range.end}` : "Tap a date"}
+           range.start && range.end ? `${range.start} → ${range.end}` : CL.calTapDate}
         </span>
         <div style={{ display:"flex", gap:6 }}>
           {range.start && (
             <button onClick={()=>{ onChange({start:null,end:null}); setPicking(null); }}
               style={{ background:"none", border:"none", color:T.textDim, fontFamily:T.body,
-                       fontSize:10, cursor:"pointer" }}>Clear</button>
+                       fontSize:10, cursor:"pointer" }}>{CL.calClear}</button>
           )}
           <button onClick={onClose}
             style={{ background:T.bg2, border:`1px solid ${T.border}`, color:T.textMid,
                      fontFamily:T.font, fontSize:10, fontWeight:600, padding:"3px 10px",
-                     borderRadius:6, cursor:"pointer" }}>Done</button>
+                     borderRadius:6, cursor:"pointer" }}>{CL.calDone}</button>
         </div>
       </div>
     </div>
@@ -449,6 +511,7 @@ const CATEGORIES = [
 export default function App() {
   const [events,    setEvents]    = useState(DB.events);
   const [loading,   setLoading]   = useState(true);
+  const [lang,      setLang]      = useState("en");
   const [dateFil,   setDateFil]   = useState("weekend");
   const [dateRange, setDateRange] = useState({ start: null, end: null });
   const [calOpen,   setCalOpen]   = useState(false);
@@ -457,6 +520,9 @@ export default function App() {
   const [search,    setSearch]    = useState("");
   const [selected,  setSelected]  = useState(null);
   const [history,   setHistory]   = useState([]);
+
+  const L = I18N[lang];
+  const isRTL = lang === "he";
 
   useEffect(() => {
     fetch("/api/events")
@@ -503,7 +569,7 @@ export default function App() {
   const todayCount = events.filter(e => e.event_date === TODAY).length;
 
   return (
-    <div style={{ minHeight:"100vh", background:T.bg0, color:T.text, fontFamily:T.body }}>
+    <div dir={isRTL ? "rtl" : "ltr"} style={{ minHeight:"100vh", background:T.bg0, color:T.text, fontFamily:T.body }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap');
         @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(245,166,35,0.7)} 70%{box-shadow:0 0 0 7px rgba(245,166,35,0)} 100%{box-shadow:0 0 0 0 rgba(245,166,35,0)} }
@@ -520,19 +586,28 @@ export default function App() {
 
           {/* Brand row */}
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
-            <div>
-              <div style={{ fontFamily:T.font, fontSize:22, fontWeight:800, letterSpacing:"-0.02em", lineHeight:1 }}>
-                my<span style={{ color:T.amber }}>tlv</span><span style={{ color:T.textDim, fontSize:17 }}>.ai</span>
+            <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+              <div>
+                <div style={{ fontFamily:T.font, fontSize:22, fontWeight:800, letterSpacing:"-0.02em", lineHeight:1 }}>
+                  my<span style={{ color:T.amber }}>tlv</span><span style={{ color:T.textDim, fontSize:17 }}>.ai</span>
+                </div>
+                <div style={{ fontSize:10, color:T.textDim, fontFamily:T.body, marginTop:3 }}>
+                  Tel Aviv · <span style={{ color:T.amber }}>{L.eventsToday(todayCount)}</span> · {L.total(events.length)}
+                </div>
               </div>
-              <div style={{ fontSize:10, color:T.textDim, fontFamily:T.body, marginTop:3 }}>
-                Tel Aviv · <span style={{ color:T.amber }}>{todayCount}</span> events today · {events.length} total
-              </div>
+              {/* Language toggle */}
+              <button onClick={()=>setLang(l=>l==="en"?"he":"en")}
+                style={{ padding:"4px 10px", borderRadius:6, border:`1px solid ${T.border}`,
+                         background:"none", color:T.textMid, fontFamily:T.font, fontSize:11,
+                         fontWeight:700, cursor:"pointer", letterSpacing:"0.04em", flexShrink:0 }}>
+                {L.langToggle}
+              </button>
             </div>
 
             {/* Search */}
             <div style={{ display:"flex", alignItems:"center", gap:8, background:T.bg1, border:`1px solid ${T.border}`, borderRadius:8, padding:"7px 12px", width:220 }}>
               <span style={{ color:T.textDim, fontSize:13 }}>⌕</span>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search events, venues…"
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={L.searchPlaceholder}
                 style={{ background:"none", border:"none", outline:"none", color:T.text, fontFamily:T.body, fontSize:12, width:"100%" }} />
               {search && <button onClick={()=>setSearch("")} style={{ background:"none", border:"none", color:T.textDim, cursor:"pointer", fontSize:12, padding:0 }}>✕</button>}
             </div>
@@ -546,7 +621,7 @@ export default function App() {
                 background: !dateRange.start && dateFil===df.id ? T.amber : T.bg2,
                 color: !dateRange.start && dateFil===df.id ? T.bg0 : T.textMid,
                 fontFamily:T.font, fontSize:11, fontWeight: !dateRange.start && dateFil===df.id ? 700 : 500, cursor:"pointer",
-              }}>{df.label}</button>
+              }}>{L.dates[df.id]}</button>
             ))}
             {/* Calendar toggle */}
             <button onClick={()=>setCalOpen(o=>!o)} style={{
@@ -561,7 +636,7 @@ export default function App() {
                     : dateRange.start.slice(5))
                 : "📅"}
             </button>
-            <div style={{ marginLeft:"auto", display:"flex", gap:4 }}>
+            <div style={{ marginInlineStart:"auto", display:"flex", gap:4 }}>
               {["all","free","paid"].map(p => (
                 <button key={p} onClick={()=>setPriceFil(p)} style={{
                   padding:"5px 10px", borderRadius:6, border:"none",
@@ -569,7 +644,7 @@ export default function App() {
                   color: priceFil===p ? T.tealBright : T.textDim,
                   fontFamily:T.font, fontSize:10, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap",
                 }}>
-                  {p==="all" ? "All prices" : p.charAt(0).toUpperCase()+p.slice(1)}
+                  {L.prices[p]}
                 </button>
               ))}
             </div>
@@ -579,6 +654,7 @@ export default function App() {
               range={dateRange}
               onChange={r=>{ setDateRange(r); if(r.start) setDateFil("all"); }}
               onClose={()=>setCalOpen(false)}
+              lang={lang}
             />
           )}
 
@@ -592,12 +668,12 @@ export default function App() {
                 color: catFil===c.id ? T.amber : T.textMid,
                 fontFamily:T.font, fontSize:12, fontWeight: catFil===c.id ? 700 : 500, cursor:"pointer",
               }}>
-                <span>{c.emoji}</span>{c.label}
+                <span>{c.emoji}</span>{L.cats[c.id]}
               </button>
             ))}
 
             {/* Source legend */}
-            <div style={{ marginLeft:"auto", display:"flex", gap:6, alignItems:"center", flexShrink:0 }}>
+            <div style={{ marginInlineStart:"auto", display:"flex", gap:6, alignItems:"center", flexShrink:0 }}>
               {Object.entries(SOURCE_META).slice(0,4).map(([k,v]) => (
                 <span key={k} style={{ fontSize:9, fontFamily:T.font, fontWeight:700, color:v.color, background:v.color+"15", padding:"3px 7px", borderRadius:4 }}>{v.label}</span>
               ))}
@@ -612,7 +688,7 @@ export default function App() {
         {filtered.length === 0 ? (
           <div style={{ textAlign:"center", padding:"80px 0", color:T.textDim, fontFamily:T.font, fontSize:15 }}>
             <div style={{ fontSize:36, marginBottom:12 }}>🌙</div>
-            Nothing found — try "Weekend" or clear the filter
+            {L.emptyState}
           </div>
         ) : (
           Object.entries(grouped).map(([dateKey, evs]) => (
@@ -620,10 +696,10 @@ export default function App() {
               {/* Date section header */}
               <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
                 <div style={{ fontFamily:T.font, fontSize:13, fontWeight:700, color:T.amber, letterSpacing:"0.06em" }}>
-                  {fmtDate(dateKey).toUpperCase()}
+                  {fmtDate(dateKey, lang).toUpperCase()}
                 </div>
                 <div style={{ flex:1, height:1, background:T.border }} />
-                <div style={{ fontFamily:T.body, fontSize:10, color:T.textDim }}>{evs.length} event{evs.length!==1?"s":""}</div>
+                <div style={{ fontFamily:T.body, fontSize:10, color:T.textDim }}>{L.eventCount(evs.length)}</div>
               </div>
 
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))", gap:12 }}>
@@ -635,7 +711,7 @@ export default function App() {
 
         {/* Data sources footer */}
         <div style={{ marginTop:48, borderTop:`1px solid ${T.border}`, paddingTop:24 }}>
-          <div style={{ fontFamily:T.font, fontSize:10, color:T.textDim, letterSpacing:"0.08em", marginBottom:12 }}>DATA SOURCES</div>
+          <div style={{ fontFamily:T.font, fontSize:10, color:T.textDim, letterSpacing:"0.08em", marginBottom:12 }}>{L.dataSources}</div>
           <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
             {[
               ["Secret Tel Aviv",    "🟢 Tribe REST API",    "#e879f9"],
@@ -655,7 +731,7 @@ export default function App() {
       </main>
 
       {/* ── Modal ── */}
-      {selected && <Modal ev={selected} events={events} onClose={closeModal} onNavigate={navSimilar} />}
+      {selected && <Modal ev={selected} events={events} onClose={closeModal} onNavigate={navSimilar} lang={lang} />}
     </div>
   );
 }

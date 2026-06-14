@@ -19,7 +19,6 @@ export default async function handler(req, res) {
       tags
     FROM events
     WHERE is_published = true
-      AND event_date >= CURRENT_DATE
     ORDER BY event_date, start_time
   `;
 
