@@ -60,10 +60,19 @@ FB_PAGES = {
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _app_token():
+    # Prefer long-lived User Access Token (60 days, from Graph API Explorer).
+    # Falls back to App Access Token (needs Page Public Content Access feature).
+    user_token = os.environ.get("FB_USER_TOKEN", "")
+    if user_token:
+        return user_token
     app_id     = os.environ.get("FB_APP_ID", "")
     app_secret = os.environ.get("FB_APP_SECRET", "")
     if not app_id or not app_secret:
-        raise RuntimeError("FB_APP_ID and FB_APP_SECRET must be set in environment")
+        raise RuntimeError(
+            "Set FB_USER_TOKEN (preferred) or FB_APP_ID+FB_APP_SECRET in environment.\n"
+            "Get FB_USER_TOKEN from developers.facebook.com/tools/explorer — "
+            "add pages_read_engagement, generate token, exchange for 60-day token."
+        )
     return f"{app_id}|{app_secret}"
 
 def _get(url, params=None, retries=3):
