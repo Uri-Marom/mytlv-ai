@@ -654,25 +654,45 @@ export default function App() {
     });
   }, [events, dateFil, dateRange, activeCats, freeOnly, search, disliked]);
 
-  // Group by date, sort within each day by venue's earliest event then by time
+  // Events 00:00–07:59 belong to the previous day (late-night continuation).
+  // sortTime adds 24h to those so they sort after the evening events.
+  function displayDateOf(ev) {
+    const h = ev.start_time ? parseInt(ev.start_time.slice(0, 2), 10) : 12;
+    if (h < 8 && ev.event_date > TODAY) {
+      const d = new Date(ev.event_date + "T00:00:00");
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().slice(0, 10);
+    }
+    return ev.event_date;
+  }
+
+  function sortTimeOf(ev) {
+    if (!ev.start_time) return "12:00";
+    const h = parseInt(ev.start_time.slice(0, 2), 10);
+    if (h < 8) return `${h + 24}:${ev.start_time.slice(3, 5)}`;
+    return ev.start_time.slice(0, 5);
+  }
+
+  // Group by display date, sort within each day by venue's earliest event then by adjusted time
   const grouped = useMemo(() => {
     const byDate = {};
     for (const ev of filtered) {
-      if (!byDate[ev.event_date]) byDate[ev.event_date] = [];
-      byDate[ev.event_date].push(ev);
+      const d = displayDateOf(ev);
+      if (!byDate[d]) byDate[d] = [];
+      byDate[d].push(ev);
     }
     for (const evs of Object.values(byDate)) {
       const venueEarliest = {};
       for (const ev of evs) {
         const v = (ev.venue_name || "~");
-        if (!venueEarliest[v] || (ev.start_time||"") < venueEarliest[v])
-          venueEarliest[v] = ev.start_time || "";
+        const t = sortTimeOf(ev);
+        if (!venueEarliest[v] || t < venueEarliest[v]) venueEarliest[v] = t;
       }
       evs.sort((a, b) => {
         const va = venueEarliest[a.venue_name||"~"] || "";
         const vb = venueEarliest[b.venue_name||"~"] || "";
         if (va !== vb) return va < vb ? -1 : 1;
-        return (a.start_time||"") < (b.start_time||"") ? -1 : 1;
+        return sortTimeOf(a) < sortTimeOf(b) ? -1 : 1;
       });
     }
     return byDate;
