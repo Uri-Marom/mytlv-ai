@@ -1,9 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 
 // ── Deduplication ────────────────────────────────────────────────────────────
-// Key: event_date + normalised venue + start_time (catches cross-source dups
-// like STA "Eviatar Banai" vs Barby "אביתר בנאי" at same venue/time).
-// Also catches STA internal dups ("Off Grid @ Kuli Alma" vs "Off Grid").
 
 function norm(s) {
   return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -16,30 +13,76 @@ function dataScore(e) {
          (e.price_max ? 1 : 0);
 }
 
+function timeMins(t) {
+  // "HH:MM:SS" or "HH:MM" → minutes since midnight
+  if (!t) return null;
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function timeDiff(tA, tB) {
+  // Absolute difference in minutes, wrapping midnight
+  const a = timeMins(tA), b = timeMins(tB);
+  if (a === null || b === null) return null;
+  const d = Math.abs(a - b);
+  return Math.min(d, 1440 - d); // handle midnight wrap
+}
+
 function deduplicate(events) {
-  // Priority: STA > venue scrapers > others (STA has richer metadata)
+  // STA has richer metadata (descriptions, images from their editorial team)
   const sourcePriority = s =>
     s === "secret_tel_aviv" ? 0 :
     s.startsWith("venue_") ? 1 : 2;
 
   const dominated = new Set();
-  const groups = new Map();
 
+  // Pass 1: exact date + venue + time match (same-source internal dups too)
+  const exactGroups = new Map();
   for (const e of events) {
     if (!e.venue_name || !e.start_time) continue;
-    const key = `${e.event_date}|${norm(e.venue_name)}|${(e.start_time || "").slice(0, 5)}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(e);
+    const key = `${e.event_date}|${norm(e.venue_name)}|${(e.start_time).slice(0, 5)}`;
+    if (!exactGroups.has(key)) exactGroups.set(key, []);
+    exactGroups.get(key).push(e);
+  }
+  for (const group of exactGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => sourcePriority(a.source) - sourcePriority(b.source) || dataScore(b) - dataScore(a));
+    for (let i = 1; i < group.length; i++) dominated.add(group[i].id);
   }
 
-  for (const group of groups.values()) {
+  // Pass 2: cross-source fuzzy — same date + venue, times within 45 min (or one null).
+  // Handles: Barby "doors 20:30" (STA) vs "show 21:00" (venue_barby),
+  //          Hameretz2 null time (before fix) vs STA with time.
+  // Groups by date + venue across different sources.
+  const venueDay = new Map();
+  for (const e of events) {
+    if (!e.venue_name || dominated.has(e.id)) continue;
+    const key = `${e.event_date}|${norm(e.venue_name)}`;
+    if (!venueDay.has(key)) venueDay.set(key, []);
+    venueDay.get(key).push(e);
+  }
+
+  for (const group of venueDay.values()) {
     if (group.length < 2) continue;
-    // Pick winner: highest source priority, then highest data score
-    group.sort((a, b) =>
-      sourcePriority(a.source) - sourcePriority(b.source) ||
-      dataScore(b) - dataScore(a)
-    );
-    for (let i = 1; i < group.length; i++) dominated.add(group[i].id);
+    // Only compare cross-source pairs
+    for (let i = 0; i < group.length; i++) {
+      if (dominated.has(group[i].id)) continue;
+      for (let j = i + 1; j < group.length; j++) {
+        if (dominated.has(group[j].id)) continue;
+        const a = group[i], b = group[j];
+        if (a.source === b.source) continue;
+
+        const diff = timeDiff(a.start_time, b.start_time);
+        // Match if: one has no time, OR times within 45 min
+        const timeCompatible = diff === null || diff <= 45;
+        if (!timeCompatible) continue;
+
+        // Keep the better-quality event
+        const aWins = sourcePriority(a.source) < sourcePriority(b.source) ||
+          (sourcePriority(a.source) === sourcePriority(b.source) && dataScore(a) >= dataScore(b));
+        dominated.add(aWins ? b.id : a.id);
+      }
+    }
   }
 
   return events.filter(e => !dominated.has(e.id));

@@ -386,6 +386,44 @@ def _scrape_hameretz2(page, cfg) -> list[VenueEvent]:
     CLASSICAL_KEYWORDS = re.compile(
         r"quartet|orchestra|symphon|classical|philharmon|רביעייה|תזמורת", re.I)
 
+    def _fetch_ticket_details(ticket_page, href):
+        """Fetch individual ticket page for start time, doors time, and price."""
+        try:
+            ticket_page.goto(href, timeout=12000, wait_until="domcontentloaded")
+            time.sleep(1.5)
+            txt = ticket_page.inner_text("body")
+            lines = [l.strip() for l in txt.split('\n') if l.strip()]
+
+            start_time, price_min, price_max = None, 0, None
+
+            # Parse time: look for "לייב ב-HH:MM" or standalone HH:MM after "התחלה"
+            show_m = re.search(r"לייב\s+ב.?(\d{1,2}:\d{2})", txt)
+            if not show_m:
+                # fallback: find "התחלה" then next HH:MM
+                for i, l in enumerate(lines):
+                    if "התחלה" in l:
+                        for l2 in lines[i:i+3]:
+                            m = re.search(r"\b(\d{1,2}:\d{2})\b", l2)
+                            if m: show_m = m; break
+                        break
+            if show_m:
+                t = show_m.group(1) if hasattr(show_m, 'group') else show_m
+                h, mi = map(int, t.split(':'))
+                start_time = f"{h:02d}:{mi:02d}"
+
+            # Parse price: look for NN.00₪ or ₪NN patterns
+            prices = [int(float(m)) for m in re.findall(r"(\d+)(?:\.\d+)?₪", txt) if 10 < int(float(m)) < 1000]
+            if prices:
+                price_min, price_max = min(prices), (max(prices) if len(prices) > 1 and max(prices) != min(prices) else None)
+
+            return start_time, price_min, price_max
+        except Exception as e:
+            log.debug(f"  ticket page error {href}: {e}")
+            return None, 0, None
+
+    # Open a second tab for ticket detail pages
+    ticket_page = page.context.new_page()
+
     for item in items:
         href = item.get("href", "")
         lines = item.get("lines", [])
@@ -408,11 +446,9 @@ def _scrape_hameretz2(page, cfg) -> list[VenueEvent]:
                     year += 1
                 try:
                     ev_date = date(year, month, day)
-                    # Title is the next non-empty line after the date
                     for j in range(i + 1, min(i + 4, len(lines))):
                         if lines[j] and not re.search(r"^\d{1,2}\.\d{2}", lines[j]):
                             title = lines[j]
-                            # Description is the next lines
                             desc_parts = [l for l in lines[j+1:j+3] if l and len(l) > 5]
                             description = " ".join(desc_parts)[:300]
                             break
@@ -420,6 +456,9 @@ def _scrape_hameretz2(page, cfg) -> list[VenueEvent]:
                     pass
 
         if not ev_date or not title: continue
+
+        # Fetch ticket page for time + price
+        start_time, price_min, price_max = _fetch_ticket_details(ticket_page, href)
 
         # Category inference from title + description
         combined = f"{title} {description}"
@@ -443,15 +482,18 @@ def _scrape_hameretz2(page, cfg) -> list[VenueEvent]:
             category=category,
             subcategory=subcategory,
             event_date=ev_date,
-            start_time=None,
+            start_time=start_time,
             end_time=None,
             image_url=item.get("img"),
             ticket_url=href,
             source_url=href,
             description=description,
+            price_min=price_min,
+            price_max=price_max,
             tags=[subcategory.title()] if subcategory not in ("general", "live") else ["Live Music"],
         ))
 
+    ticket_page.close()
     log.info(f"Hameretz 2: {len(events)} events parsed")
     return events
 
