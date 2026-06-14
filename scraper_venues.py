@@ -9,7 +9,10 @@ Usage:
   python scraper_venues.py --venue barby                   # single venue
 """
 import os, re, sys, time, logging, argparse
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
+
+# Israel Daylight Time (UTC+3, Jun–Oct). Standard time is UTC+2.
+_IDT = timezone(timedelta(hours=3))
 from dataclasses import dataclass, field
 from typing import Optional
 import psycopg2
@@ -124,9 +127,11 @@ def _scrape_barby(page, cfg) -> list[VenueEvent]:
         document.querySelectorAll('.card-home').forEach(card => {
             const lines = (card.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean);
             const imgEl = card.querySelector('img');
+            const linkEl = card.closest('a') || card.querySelector('a');
             results.push({
                 lines,
                 img: imgEl ? imgEl.src : null,
+                href: linkEl ? linkEl.href : null,
             });
         });
         return results;
@@ -134,6 +139,34 @@ def _scrape_barby(page, cfg) -> list[VenueEvent]:
 
     log.info(f"Barby: found {len(cards)} cards")
     events = []
+    detail_page = page.context.new_page()
+
+    def _fetch_barby_price(show_url):
+        """Fetch price from a barby.co.il/show/NNNN page."""
+        if not show_url or "/show/" not in show_url:
+            return None, None
+        try:
+            detail_page.goto(show_url, timeout=12000, wait_until="domcontentloaded")
+            time.sleep(1.5)
+            txt = detail_page.inner_text("body")
+            # Look for "NNN ₪" or "₪NNN" or "NNN ILS" patterns
+            prices = []
+            for m in re.findall(r"(\d{2,4})\s*[₪]", txt):
+                n = int(m)
+                if 10 <= n <= 2000: prices.append(n)
+            for m in re.findall(r"[₪]\s*(\d{2,4})", txt):
+                n = int(m)
+                if 10 <= n <= 2000: prices.append(n)
+            for m in re.findall(r"(\d{2,4})\s*ILS", txt, re.I):
+                n = int(m)
+                if 10 <= n <= 2000: prices.append(n)
+            if not prices:
+                return None, None
+            prices = sorted(set(prices))
+            return prices[0], (prices[-1] if len(prices) > 1 else None)
+        except Exception as e:
+            log.debug(f"Barby price fetch error {show_url}: {e}")
+            return None, None
 
     for card in cards:
         lines = card.get("lines", [])
@@ -168,13 +201,16 @@ def _scrape_barby(page, cfg) -> list[VenueEvent]:
         title = title_candidates[0].strip()
         if not title: continue
 
-        # Price (only available on Barby for the next show banner; None = unknown)
-        price_line = next((l for l in lines if "מחיר" in l or "₪" in l), None)
-        price_min, price_max = _parse_price(price_line or "")
-
         # Ticket availability
         sold_out = any("אזלו" in l for l in lines)
-        ticket_url = cfg["url"] if not sold_out else None
+        show_url = card.get("href") or cfg["url"]
+        ticket_url = show_url if not sold_out else None
+
+        # Fetch price from detail page; fallback to card text
+        price_min, price_max = _fetch_barby_price(show_url)
+        if price_min is None:
+            price_line = next((l for l in lines if "מחיר" in l or "₪" in l), None)
+            price_min, price_max = _parse_price(price_line or "")
 
         source_id = f"barby-{ev_date.isoformat()}-{_slugify(title)}"
 
@@ -182,7 +218,7 @@ def _scrape_barby(page, cfg) -> list[VenueEvent]:
         if sold_out: tags.append("Sold Out")
 
         events.append(VenueEvent(
-            source=f"venue_barby",
+            source="venue_barby",
             source_id=source_id,
             title=title,
             venue_name=cfg["label"],
@@ -194,12 +230,13 @@ def _scrape_barby(page, cfg) -> list[VenueEvent]:
             end_time=None,
             image_url=card.get("img"),
             ticket_url=ticket_url,
-            source_url=cfg["url"],
+            source_url=show_url,
             price_min=price_min,
             price_max=price_max,
             tags=tags,
         ))
 
+    detail_page.close()
     log.info(f"Barby: {len(events)} events parsed")
     return events
 
@@ -224,60 +261,58 @@ def _scrape_levontin7(page, cfg) -> list[VenueEvent]:
     detail_page = page.context.new_page()
 
     def _fetch_levontin_price(slug_url):
-        """Visit a Levontin event page and extract ticket price."""
+        """Visit a Levontin event page and extract ticket prices. Returns (min, max)."""
         if slug_url in slug_price_cache:
             return slug_price_cache[slug_url]
         try:
             detail_page.goto(slug_url, timeout=12000, wait_until="domcontentloaded")
-            time.sleep(1)
-            price = detail_page.evaluate("""() => {
-                // Try direct selectors first
-                for (const cls of ['fat-event-total-fees', 'fat-event-fees']) {
-                    const el = document.querySelector('.' + cls);
-                    if (el) {
-                        // Try text node after
-                        const next = el.nextSibling;
-                        if (next && next.nodeType === 3) {
-                            const t = next.textContent.trim();
-                            const n = parseInt(t, 10);
-                            if (!isNaN(n) && n > 5 && n < 5000) return n;
-                        }
-                        // Try inside element
-                        const inner = el.innerText?.replace(/[^0-9]/g, '');
-                        if (inner) {
-                            const n = parseInt(inner, 10);
-                            if (!isNaN(n) && n > 5 && n < 5000) return n;
-                        }
-                        // Try parent text
-                        const parentTxt = (el.parentElement?.innerText || '');
-                        const m = parentTxt.match(/\\b(\\d{2,3})\\b/);
-                        if (m) {
-                            const n = parseInt(m[1], 10);
-                            if (n > 5 && n < 5000) return n;
-                        }
-                    }
+            time.sleep(2.5)  # ticket widget needs time to render
+            prices = detail_page.evaluate("""() => {
+                // 1. Try .fat-event-fees / .fat-event-total-fees widget elements
+                const feeEls = document.querySelectorAll('.fat-event-fees, .fat-event-total-fees, .fat-ticket-price, .fat-price');
+                for (const el of feeEls) {
+                    const txt = (el.innerText || '') + ' ' + (el.nextSibling?.textContent || '') + ' ' + (el.parentElement?.innerText || '');
+                    const nums = [...txt.matchAll(/\\b(\\d{2,3})\\b/g)]
+                        .map(m => parseInt(m[1], 10))
+                        .filter(n => n >= 10 && n <= 500);
+                    if (nums.length) return nums;
                 }
-                // Scan all text nodes for price-like numbers (2-3 digits, 5-500 range)
-                let foundPrice = null;
-                const walker = document.createTreeWalker(
-                    document.body, NodeFilter.SHOW_TEXT, null
-                );
+
+                // 2. Look for ₪-adjacent numbers anywhere on page (most reliable)
+                const shekelMatches = [];
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
                 let node;
                 while (node = walker.nextNode()) {
-                    const m = node.textContent.match(/\\b(\\d{2,3})\\b/);
-                    if (m) {
-                        const n = parseInt(m[1], 10);
-                        if (n > 5 && n < 500) foundPrice = n;  // last match wins
+                    const t = node.textContent;
+                    // Match "50₪", "₪50", "50 ₪", "מחיר: 50"
+                    const m1 = t.match(/(\\d{2,3})\\s*[₪]/g);
+                    const m2 = t.match(/[₪]\\s*(\\d{2,3})/g);
+                    for (const m of [...(m1||[]), ...(m2||[])]) {
+                        const n = parseInt(m.replace(/[^0-9]/g,''), 10);
+                        if (n >= 10 && n <= 500) shekelMatches.push(n);
+                    }
+                    // Match price keyword context
+                    if (/מחיר|כרטיס|כניסה|entrance|price/i.test(t)) {
+                        const nums = [...t.matchAll(/\\b(\\d{2,3})\\b/g)]
+                            .map(m => parseInt(m[1], 10))
+                            .filter(n => n >= 10 && n <= 500);
+                        shekelMatches.push(...nums);
                     }
                 }
-                return foundPrice;
+                if (shekelMatches.length) return [...new Set(shekelMatches)];
+
+                return null;
             }""")
-            slug_price_cache[slug_url] = price
-            return price
+            result = (None, None)
+            if prices and len(prices) > 0:
+                unique = sorted(set(prices))
+                result = (unique[0], unique[-1] if len(unique) > 1 else None)
+            slug_price_cache[slug_url] = result
+            return result
         except Exception as e:
             log.debug(f"Levontin price fetch error {slug_url}: {e}")
-            slug_price_cache[slug_url] = None
-            return None
+            slug_price_cache[slug_url] = (None, None)
+            return (None, None)
 
     for link in links:
         href = link.get("href", "")
@@ -292,8 +327,9 @@ def _scrape_levontin7(page, cfg) -> list[VenueEvent]:
         sd = int(m_sd.group(1))
         ed = int(m_ed.group(1)) if m_ed else None
 
-        dt_start = datetime.fromtimestamp(sd)
-        dt_end   = datetime.fromtimestamp(ed) if ed else None
+        # Use Israel timezone explicitly so dates are correct regardless of server TZ
+        dt_start = datetime.fromtimestamp(sd, tz=_IDT)
+        dt_end   = datetime.fromtimestamp(ed, tz=_IDT) if ed else None
 
         ev_date   = dt_start.date()
         start_time = dt_start.strftime("%H:%M")
@@ -313,8 +349,7 @@ def _scrape_levontin7(page, cfg) -> list[VenueEvent]:
 
         # Fetch price from the detail page (cached per slug)
         slug_url = href.split("?")[0]
-        raw_price = _fetch_levontin_price(slug_url)
-        price_min = raw_price if raw_price else None
+        price_min, price_max = _fetch_levontin_price(slug_url)
 
         events.append(VenueEvent(
             source="venue_levontin7",
@@ -331,6 +366,7 @@ def _scrape_levontin7(page, cfg) -> list[VenueEvent]:
             ticket_url=slug_url,
             source_url=href,
             price_min=price_min,
+            price_max=price_max,
             tags=["Live Music"],
         ))
 

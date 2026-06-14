@@ -53,6 +53,8 @@ class Event:
     image_url:    Optional[str]
     ticket_url:   Optional[str]
     source_url:   str
+    price_min:    Optional[int] = None
+    price_max:    Optional[int] = None
 
 
 session = requests.Session()
@@ -81,11 +83,55 @@ def _og(soup, prop):
     t = soup.find("meta", property=prop)
     return t["content"].strip() if t and t.get("content") else None
 
+EXTERNAL_EVENT_DOMAINS = ["livenation.co.il","ticketmaster.co.il","eventim.co.il","leaan.co.il"]
+
 def _ticket_url(soup):
     for a in soup.find_all("a", href=True):
         if any(d in a["href"] for d in TICKET_DOMAINS):
             return a["href"]
     return None
+
+def _extract_prices_from_text(text: str):
+    """Extract price_min, price_max from page text. Returns (None, None) if not found."""
+    # Match ₪NN or NN₪ patterns
+    shekel_prices = [int(float(m)) for m in re.findall(r"(\d+(?:\.\d+)?)\s*[₪]", text) if 10 <= int(float(m)) <= 2000]
+    shekel_prices += [int(float(m)) for m in re.findall(r"[₪]\s*(\d+(?:\.\d+)?)", text) if 10 <= int(float(m)) <= 2000]
+    # Match "ILS NN" or "NN ILS"
+    ils_prices = [int(float(m)) for m in re.findall(r"(\d+)\s*ILS\b", text, re.I) if 10 <= int(float(m)) <= 2000]
+    ils_prices += [int(float(m)) for m in re.findall(r"\bILS\s*(\d+)", text, re.I) if 10 <= int(float(m)) <= 2000]
+    all_prices = sorted(set(shekel_prices + ils_prices))
+    if not all_prices:
+        return None, None
+    return all_prices[0], (all_prices[-1] if len(all_prices) > 1 else None)
+
+def _fetch_external_price(url: str):
+    """Follow an external ticket URL (e.g. LiveNation) and try to extract price."""
+    try:
+        r = _get(url)
+        if not r: return None, None
+        text = BeautifulSoup(r.text, "html.parser").get_text(" ")
+        return _extract_prices_from_text(text)
+    except Exception:
+        return None, None
+
+def _prices_from_soup(soup) -> tuple:
+    """Extract prices from an STA detail page soup. Follows 'Original Event' external links."""
+    # Try direct text extraction first
+    text = soup.get_text(" ")
+    pmin, pmax = _extract_prices_from_text(text)
+    if pmin is not None:
+        return pmin, pmax
+    # Follow "Original Event" or external domain links
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        text_lower = (a.get_text(strip=True) or "").lower()
+        is_original = "original event" in text_lower or "לאירוע המקורי" in text_lower
+        is_external = any(d in href for d in EXTERNAL_EVENT_DOMAINS + TICKET_DOMAINS)
+        if (is_original or is_external) and href.startswith("http"):
+            pmin, pmax = _fetch_external_price(href)
+            if pmin is not None:
+                return pmin, pmax
+    return None, None
 
 def _venue_from_html(soup):
     v = soup.find(class_=re.compile(r"tribe-venue"))
@@ -134,13 +180,24 @@ def _fetch_api(sta_cat, our_cat):
             sdt = _parse_dt(ev.get("start_date",""))
             edt = _parse_dt(ev.get("end_date",""))
             ticket = ev.get("website") or None
+            desc_soup = BeautifulSoup(ev.get("description",""), "html.parser")
             if not ticket:
-                soup2 = BeautifulSoup(ev.get("description",""), "html.parser")
-                ticket = _ticket_url(soup2)
+                ticket = _ticket_url(desc_soup)
+            # Try to extract price from description HTML first
+            pmin, pmax = _prices_from_soup(desc_soup)
+            # If no price in description, fetch the detail page
+            if pmin is None:
+                detail_url = ev.get("url", f"{BASE}/tickets/{slug}")
+                detail_r = _get(detail_url)
+                if detail_r:
+                    detail_soup = BeautifulSoup(detail_r.text, "html.parser")
+                    pmin, pmax = _prices_from_soup(detail_soup)
+                    if not ticket:
+                        ticket = _ticket_url(detail_soup)
             events.append(Event(
                 source_id    = str(ev.get("id", slug)),
                 title        = ev.get("title","").strip(),
-                description  = BeautifulSoup(ev.get("description",""),"html.parser").get_text(" ",strip=True)[:400],
+                description  = desc_soup.get_text(" ",strip=True)[:400],
                 category     = cat, subcategory=sub, sta_category=sta_cat,
                 event_date   = sdt.date() if sdt else None,
                 start_time   = sdt.strftime("%H:%M") if sdt else None,
@@ -150,6 +207,8 @@ def _fetch_api(sta_cat, our_cat):
                 image_url    = (ev.get("image") or {}).get("url"),
                 ticket_url   = ticket,
                 source_url   = ev.get("url", f"{BASE}/tickets/{slug}"),
+                price_min    = pmin,
+                price_max    = pmax,
             ))
         if page >= data.get("total_pages",1): break
         page += 1
@@ -176,6 +235,7 @@ def _fetch_detail(url, sta_cat, our_cat):
     sdt, edt = _dates_from_html(soup)
     vname, vaddr = _venue_from_html(soup)
     if not title or not sdt: return None
+    pmin, pmax = _prices_from_soup(soup)
     return Event(
         source_id=slug, title=title,
         description=(_og(soup,"og:description") or ""),
@@ -186,6 +246,8 @@ def _fetch_detail(url, sta_cat, our_cat):
         image_url=_og(soup,"og:image"),
         ticket_url=_ticket_url(soup),
         source_url=url,
+        price_min=pmin,
+        price_max=pmax,
     )
 
 def _fetch_html(sta_cat, our_cat):

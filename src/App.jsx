@@ -17,7 +17,11 @@ const SIM_INDEX = (() => {
 })();
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-const TODAY = new Date().toISOString().slice(0, 10);
+// Use local time; before 8am counts as "still last night" so go back 1 day.
+const _now = new Date();
+const _d = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate());
+if (_now.getHours() < 8) _d.setDate(_d.getDate() - 1);
+const TODAY = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
 
 const SOURCE_META = {
   secret_tel_aviv:      { label: "Secret TLV",  color: "#e879f9" },
@@ -547,11 +551,11 @@ function MiniCalendar({ range, onChange, onClose, lang = "en" }) {
 
 // ── Date nav strip ─────────────────────────────────────────────────────────
 const DATE_FILTERS = [
+  { id:"all",       label:"All"       },
   { id:"today",     label:"Today"     },
   { id:"tomorrow",  label:"Tomorrow"  },
   { id:"weekend",   label:"Weekend"   },
   { id:"next-week", label:"Next Week" },
-  { id:"all",       label:"All"       },
 ];
 
 const CATEGORIES = [
@@ -573,7 +577,7 @@ export default function App() {
   const [events,     setEvents]     = useState(DB.events);
   const [sources,    setSources]    = useState([]);
   const [lang,       setLang]       = useState("en");
-  const [dateFil,    setDateFil]    = useState("weekend");
+  const [dateFil,    setDateFil]    = useState("all");
   const [dateRange,  setDateRange]  = useState({ start: null, end: null });
   const [calOpen,    setCalOpen]    = useState(false);
   const [activeCats, setActiveCats] = useState(new Set());
@@ -640,6 +644,7 @@ export default function App() {
   const filtered = useMemo(() => {
     return events.filter(ev => {
       if (disliked.has(ev.id)) return false;
+      if (ev.event_date < TODAY) return false;   // never show past events
       if (!matchDate(ev, dateFil, dateRange)) return false;
       if (activeCats.size > 0 && ![...activeCats].some(c => evMatchesCat(ev, c))) return false;
       if (freeOnly && (ev.price_min === null || ev.price_min > 0)) return false;
