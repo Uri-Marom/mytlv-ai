@@ -249,6 +249,16 @@ def run(seed_only=False, similarity_only=False):
             except Exception as e:
                 log.error(f"Bandsintown scraper failed: {e}")
 
+            log.info("=== Scraping Facebook Pages ===")
+            try:
+                from scraper_facebook import scrape as fb_scrape
+                fb_evs = fb_scrape()
+                # Convert FBEvent dataclasses to dicts
+                fb_dicts = [e.__dict__ for e in fb_evs]
+                upsert_events(conn, fb_dicts, "facebook")
+            except Exception as e:
+                log.error(f"Facebook scraper failed: {e}")
+
             log.info("=== Scraping Venues (Barby, Levontin, Ozen, Teder, Tmuna, ...) ===")
             try:
                 from scraper_venues import scrape_all_venues

@@ -34,6 +34,10 @@ const SOURCE_META = {
   venue_hangar11:       { label: "Hangar 11",    color: "#10b981" },
   venue_hameretz2:      { label: "Hameretz 2",   color: "#f59e0b" },
   venue_beit_radical:   { label: "Beit Radical", color: "#818cf8" },
+  venue_ozen:           { label: "Ozen Bar",     color: "#fb923c" },
+  venue_teder:          { label: "Teder.fm",     color: "#34d399" },
+  venue_tmuna:          { label: "Tmuna",        color: "#c084fc" },
+  facebook:             { label: "Facebook",     color: "#1877F2" },
 };
 
 const CAT_EMOJI = {
