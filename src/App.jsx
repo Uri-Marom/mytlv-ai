@@ -25,6 +25,9 @@ const SOURCE_META = {
   bandsintown:          { label: "Bandsintown",  color: "#22c55e" },
   tel_aviv_municipality:{ label: "TLV City",     color: "#a855f7" },
   eventbrite:           { label: "Eventbrite",   color: "#f97316" },
+  venue_barby:          { label: "Barby",        color: "#ef4444" },
+  venue_levontin7:      { label: "Levontin 7",   color: "#06b6d4" },
+  venue_hangar11:       { label: "Hangar 11",    color: "#10b981" },
 };
 
 const CAT_EMOJI = {

@@ -260,6 +260,11 @@ def get_event_links(sta_category: str) -> list[tuple[str, str]]:
 
 # ── DB upsert ────────────────────────────────────────────────────────────────
 
+def _derive_categories(category, subcategory):
+    if category == "cultural" and subcategory == "exhibition": return ["art"]
+    if category == "market" and subcategory == "food": return ["food"]
+    return [category]
+
 def upsert_events(events: list[Event], conn):
     rows = [(
         "secret_tel_aviv", e.source_id, e.title, e.description,
@@ -268,6 +273,7 @@ def upsert_events(events: list[Event], conn):
         str(e.event_date), e.start_time, e.end_time,
         e.price_min, e.price_max,
         e.image_url, e.ticket_url, e.source_url, e.tags,
+        _derive_categories(e.category, e.subcategory),
     ) for e in events]
 
     with conn.cursor() as cur:
@@ -278,7 +284,7 @@ def upsert_events(events: list[Event], conn):
                 venue_name, neighborhood,
                 event_date, start_time, end_time,
                 price_min, price_max,
-                image_url, ticket_url, source_url, tags
+                image_url, ticket_url, source_url, tags, categories
             ) VALUES %s
             ON CONFLICT (source, source_id) DO UPDATE SET
                 title        = EXCLUDED.title,
@@ -295,6 +301,7 @@ def upsert_events(events: list[Event], conn):
                 image_url    = EXCLUDED.image_url,
                 ticket_url   = EXCLUDED.ticket_url,
                 tags         = EXCLUDED.tags,
+                categories   = EXCLUDED.categories,
                 updated_at   = NOW()
         """, rows)
     conn.commit()
@@ -306,6 +313,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--since", default="2026-06-12", help="Keep events from this date forward")
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--no-venues", action="store_true", help="Skip venue scrapers")
     args = parser.parse_args()
 
     since = date.fromisoformat(args.since)
@@ -378,6 +386,19 @@ def main():
     log.info(f"Step 3: deleted {deleted} stale events before {since}")
 
     upsert_events(events, conn)
+
+    # Step 4: venue-direct scrapers (Barby, Levontin 7, Hangar 11)
+    if not args.no_venues:
+        log.info("Step 4: scraping venue sites...")
+        try:
+            from scraper_venues import scrape_all_venues, upsert_venue_events
+            venue_events = scrape_all_venues()
+            venue_events = [e for e in venue_events if e.event_date and e.event_date >= since]
+            log.info(f"  {len(venue_events)} venue events")
+            upsert_venue_events(venue_events, conn)
+        except Exception as e:
+            log.warning(f"Venue scrapers failed: {e}")
+
     conn.close()
 
     log.info(f"Done — {len(events)} events upserted into Neon")
