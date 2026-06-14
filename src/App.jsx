@@ -36,11 +36,9 @@ const CAT_EMOJI = {
 };
 
 function getEmoji(ev) {
-  // exhibition subcategory lives in "cultural" in DB but maps to "art" visually
-  const viscat = (ev.category === "cultural" && ev.subcategory === "exhibition") ? "art"
-               : (ev.category === "market"   && ev.subcategory === "food")       ? "food"
-               : ev.category;
-  const catMap = CAT_EMOJI[viscat] || {};
+  // Use the first entry in categories[] as the primary display category
+  const primary = ev.categories?.[0] || ev.category;
+  const catMap = CAT_EMOJI[primary] || CAT_EMOJI[ev.category] || {};
   const sub = (ev.subcategory || "").replace("-","_");
   return catMap[sub] || catMap.default || "📌";
 }
@@ -562,12 +560,14 @@ export default function App() {
   const filtered = useMemo(() => {
     return events.filter(ev => {
       if (!matchDate(ev, dateFil, dateRange)) return false;
-      if (catFil === "dj-set"   && ev.subcategory !== "dj-set") return false;
-      if (catFil === "art"      && !(ev.category === "cultural" && ev.subcategory === "exhibition")) return false;
-      if (catFil === "food"     && !(ev.category === "market"   && ev.subcategory === "food")) return false;
-      if (catFil === "cultural" && !(ev.category === "cultural" && ev.subcategory !== "exhibition")) return false;
-      if (catFil === "market"   && !(ev.category === "market"   && ev.subcategory !== "food")) return false;
-      if (!["all","dj-set","art","food","cultural","market"].includes(catFil) && ev.category !== catFil) return false;
+      if (catFil !== "all") {
+        const cats = ev.categories?.length ? ev.categories : [ev.category];
+        if (catFil === "dj-set") {
+          if (ev.subcategory !== "dj-set") return false;
+        } else if (!cats.includes(catFil)) {
+          return false;
+        }
+      }
       if (priceFil === "free" && ev.price_min !== 0) return false;
       if (priceFil === "paid" && ev.price_min === 0) return false;
       if (search) {

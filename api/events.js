@@ -16,7 +16,7 @@ export default async function handler(req, res) {
       end_time::text   AS end_time,
       price_min, price_max,
       image_url, ticket_url, source_url,
-      tags
+      tags, categories
     FROM events
     WHERE is_published = true
     ORDER BY event_date, start_time
