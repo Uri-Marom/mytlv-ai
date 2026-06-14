@@ -29,7 +29,7 @@ const SOURCE_META = {
 
 const CAT_EMOJI = {
   music:    { dj_set:"🎧", live:"🎸", festival:"🎪", default:"🎵" },
-  cultural: { tour:"🏛️", film:"🎬", pride:"🏳️‍🌈", festival:"🎉", lecture:"🎤", talk:"💬", meetup:"🤝", default:"✨" },
+  cultural: { tour:"🏛️", film:"🎬", pride:"🏳️‍🌈", festival:"🎉", lecture:"🎤", talk:"💬", meetup:"🤝", musical:"🎭", default:"✨" },
   art:      { exhibition:"🖼️", default:"🎨" },
   market:   { crafts:"🛍️", flea:"🪴", default:"🏪" },
   food:     { default:"🍽️" },
