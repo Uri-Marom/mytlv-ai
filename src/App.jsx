@@ -29,14 +29,25 @@ const SOURCE_META = {
 
 const CAT_EMOJI = {
   music:    { dj_set:"🎧", live:"🎸", festival:"🎪", default:"🎵" },
-  cultural: { exhibition:"🖼️", tour:"🏛️", film:"🎬", pride:"🏳️‍🌈", festival:"🎉", default:"✨" },
-  market:   { food:"🍽️", crafts:"🛍️", flea:"🪴", default:"🏪" },
+  cultural: { tour:"🏛️", film:"🎬", pride:"🏳️‍🌈", festival:"🎉", lecture:"🎤", talk:"💬", meetup:"🤝", default:"✨" },
+  art:      { exhibition:"🖼️", default:"🎨" },
+  market:   { crafts:"🛍️", flea:"🪴", default:"🏪" },
+  food:     { default:"🍽️" },
 };
 
 function getEmoji(ev) {
-  const catMap = CAT_EMOJI[ev.category] || {};
+  // exhibition subcategory lives in "cultural" in DB but maps to "art" visually
+  const viscat = (ev.category === "cultural" && ev.subcategory === "exhibition") ? "art"
+               : (ev.category === "market"   && ev.subcategory === "food")       ? "food"
+               : ev.category;
+  const catMap = CAT_EMOJI[viscat] || {};
   const sub = (ev.subcategory || "").replace("-","_");
   return catMap[sub] || catMap.default || "📌";
+}
+
+function fmtTime(t) {
+  if (!t) return "";
+  return t.slice(0, 5);
 }
 
 function fmtDate(d, lang = "en") {
@@ -141,13 +152,20 @@ function EventCard({ ev, onClick, compact }) {
 
       <div style={{ fontSize: compact ? 24 : 30, marginBottom:10 }}>{emoji}</div>
 
-      <div style={{ fontFamily:T.font, fontSize: compact ? 14 : 15, fontWeight:700, color:T.text, lineHeight:1.3, marginBottom:5, paddingRight: isToday ? 70 : 0 }}>
+      <div style={{ fontFamily:T.font, fontSize: compact ? 14 : 15, fontWeight:700, color:T.text, lineHeight:1.3, marginBottom:4, paddingRight: isToday ? 70 : 0 }}>
         {ev.title}
       </div>
 
-      <div style={{ fontSize:11, color:T.textDim, fontFamily:T.body, marginBottom:10 }}>
-        {ev.venue_name}{ev.neighborhood ? ` · ${ev.neighborhood}` : ""}
-      </div>
+      {ev.venue_name && (
+        <div style={{ fontFamily:T.font, fontSize: compact ? 12 : 13, fontWeight:600, color:T.textMid, marginBottom:3 }}>
+          {ev.venue_name}
+        </div>
+      )}
+      {ev.neighborhood && (
+        <div style={{ fontSize:10, color:T.textDim, fontFamily:T.body, marginBottom:8 }}>
+          {ev.neighborhood}
+        </div>
+      )}
 
       {!compact && ev.tags?.length > 0 && (
         <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:10 }}>
@@ -158,7 +176,7 @@ function EventCard({ ev, onClick, compact }) {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end" }}>
         <div>
           <div style={{ fontFamily:T.font, fontSize:12, color:T.amber, fontWeight:600 }}>
-            {fmtDate(ev.event_date)}{ev.start_time ? ` · ${ev.start_time}` : ""}
+            {fmtDate(ev.event_date)}{ev.start_time ? ` · ${fmtTime(ev.start_time)}` : ""}
           </div>
           {!compact && <div style={{ marginTop:5 }}><Badge source={ev.source} /></div>}
         </div>
@@ -228,7 +246,12 @@ function Modal({ ev, events, onClose, onNavigate, lang = "en" }) {
           <button onClick={onClose} style={{ position:"absolute", top:14, right:14, background:"none", border:"none", color:T.textDim, fontSize:18, cursor:"pointer", lineHeight:1, padding:4 }}>✕</button>
 
           <div style={{ fontSize:42, marginBottom:14 }}>{emoji}</div>
-          <div style={{ fontFamily:T.font, fontSize:20, fontWeight:700, color:T.text, lineHeight:1.25, marginBottom:8 }}>{ev.title}</div>
+          <div style={{ fontFamily:T.font, fontSize:20, fontWeight:700, color:T.text, lineHeight:1.25, marginBottom:4 }}>{ev.title}</div>
+          {ev.venue_name && (
+            <div style={{ fontFamily:T.font, fontSize:17, fontWeight:600, color:T.textMid, marginBottom:12, lineHeight:1.3 }}>
+              {ev.venue_name}{ev.neighborhood ? <span style={{ fontSize:13, fontWeight:400, color:T.textDim }}> · {ev.neighborhood}</span> : ""}
+            </div>
+          )}
 
           {ev.event_date === TODAY && <div style={{ display:"flex", alignItems:"center", marginBottom:12 }}><PulseRing /><span style={{ color:T.amber, fontSize:10, fontFamily:T.font, fontWeight:700, letterSpacing:"0.08em" }}>{L.happeningToday}</span></div>}
 
@@ -236,8 +259,7 @@ function Modal({ ev, events, onClose, onNavigate, lang = "en" }) {
 
           <div style={{ display:"flex", flexDirection:"column", gap:7, marginBottom:18 }}>
             {[
-              ["📍", [ev.venue_name, ev.neighborhood].filter(Boolean).join(" · ")],
-              ["📅", [fmtDate(ev.event_date), ev.start_time && `${ev.start_time}${ev.end_time ? " – "+ev.end_time : ""}`].filter(Boolean).join(" · ")],
+              ["📅", [fmtDate(ev.event_date), ev.start_time && `${fmtTime(ev.start_time)}${ev.end_time ? " – "+fmtTime(ev.end_time) : ""}`].filter(Boolean).join(" · ")],
               ["🏷️", [ev.category, ev.subcategory].filter(Boolean).join(" / ")],
               ["💰", fmtPrice(ev)],
             ].filter(([,v]) => v).map(([icon,val]) => (
@@ -327,7 +349,7 @@ const I18N = {
     total:       n => `${n} total`,
     searchPlaceholder: "Search events, venues…",
     dates: { today:"Today", tomorrow:"Tomorrow", weekend:"Weekend", "next-week":"Next Week", all:"All" },
-    cats:  { all:"All", music:"Music", "dj-set":"DJ Sets", cultural:"Cultural", market:"Markets" },
+    cats:  { all:"All", music:"Music", "dj-set":"DJ Sets", cultural:"Cultural", art:"Art", food:"Food", market:"Markets" },
     prices: { all:"All prices", free:"Free", paid:"Paid" },
     calTapDate: "Tap a date", calTapEnd: "Tap end date", calClear: "Clear", calDone: "Done",
     calDays:   ["Mo","Tu","We","Th","Fr","Sa","Su"],
@@ -355,7 +377,7 @@ const I18N = {
     total:       n => `סה״כ ${n}`,
     searchPlaceholder: "חיפוש אירועים, מקומות…",
     dates: { today:"היום", tomorrow:"מחר", weekend:"סוף שבוע", "next-week":"שבוע הבא", all:"הכל" },
-    cats:  { all:"הכל", music:"מוזיקה", "dj-set":"DJ", cultural:"תרבות", market:"שווקים" },
+    cats:  { all:"הכל", music:"מוזיקה", "dj-set":"DJ", cultural:"תרבות", art:"אמנות", food:"אוכל", market:"שווקים" },
     prices: { all:"כל המחירים", free:"חינם", paid:"בתשלום" },
     calTapDate: "בחר תאריך", calTapEnd: "בחר תאריך סיום", calClear: "נקה", calDone: "סגור",
     calDays:   ["ב׳","ג׳","ד׳","ה׳","ו׳","ש׳","א׳"],
@@ -504,6 +526,8 @@ const CATEGORIES = [
   { id:"music",    label:"Music",    emoji:"🎵" },
   { id:"dj-set",   label:"DJ Sets",  emoji:"🎧" },
   { id:"cultural", label:"Cultural", emoji:"✨" },
+  { id:"art",      label:"Art",      emoji:"🎨" },
+  { id:"food",     label:"Food",     emoji:"🍽️" },
   { id:"market",   label:"Markets",  emoji:"🛍️" },
 ];
 
@@ -538,8 +562,12 @@ export default function App() {
   const filtered = useMemo(() => {
     return events.filter(ev => {
       if (!matchDate(ev, dateFil, dateRange)) return false;
-      if (catFil === "dj-set" && ev.subcategory !== "dj-set") return false;
-      if (catFil !== "all" && catFil !== "dj-set" && ev.category !== catFil) return false;
+      if (catFil === "dj-set"   && ev.subcategory !== "dj-set") return false;
+      if (catFil === "art"      && !(ev.category === "cultural" && ev.subcategory === "exhibition")) return false;
+      if (catFil === "food"     && !(ev.category === "market"   && ev.subcategory === "food")) return false;
+      if (catFil === "cultural" && !(ev.category === "cultural" && ev.subcategory !== "exhibition")) return false;
+      if (catFil === "market"   && !(ev.category === "market"   && ev.subcategory !== "food")) return false;
+      if (!["all","dj-set","art","food","cultural","market"].includes(catFil) && ev.category !== catFil) return false;
       if (priceFil === "free" && ev.price_min !== 0) return false;
       if (priceFil === "paid" && ev.price_min === 0) return false;
       if (search) {
@@ -696,7 +724,15 @@ export default function App() {
               {/* Date section header */}
               <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
                 <div style={{ fontFamily:T.font, fontSize:13, fontWeight:700, color:T.amber, letterSpacing:"0.06em" }}>
-                  {fmtDate(dateKey, lang).toUpperCase()}
+                  {(() => {
+                    const diff = Math.round((new Date(dateKey+"T00:00:00") - new Date(TODAY+"T00:00:00")) / 86400000);
+                    const label = fmtDate(dateKey, lang).toUpperCase();
+                    if (diff === 0 || diff === 1) {
+                      const short = new Date(dateKey+"T00:00:00").toLocaleDateString(lang==="he"?"he-IL":"en-IL",{day:"numeric",month:"short"});
+                      return <>{label} <span style={{ color:T.textDim, fontWeight:500, fontSize:11 }}>· {short}</span></>;
+                    }
+                    return label;
+                  })()}
                 </div>
                 <div style={{ flex:1, height:1, background:T.border }} />
                 <div style={{ fontFamily:T.body, fontSize:10, color:T.textDim }}>{L.eventCount(evs.length)}</div>
