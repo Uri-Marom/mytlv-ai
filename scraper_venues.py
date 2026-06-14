@@ -69,6 +69,33 @@ VENUES = {
         "subcategory":  "general",
         "strategy":     "playwright",
     },
+    "ozen": {
+        "label":        "Ozen Bar",
+        "url":          "https://ozentelaviv.com",
+        "events_url":   "https://ozentelaviv.com/",
+        "neighborhood": "City Center",
+        "category":     "music",
+        "subcategory":  "live",
+        "strategy":     "html",
+    },
+    "teder": {
+        "label":        "Teder.fm",
+        "url":          "https://www.teder.fm",
+        "events_url":   "https://www.teder.fm/",
+        "neighborhood": "Tel Aviv Port",
+        "category":     "music",
+        "subcategory":  "live",
+        "strategy":     "html",
+    },
+    "tmuna": {
+        "label":        "Tmuna Theater",
+        "url":          "https://tmuna.co.il",
+        "events_url":   "https://tmuna.co.il/",
+        "neighborhood": "Jaffa",
+        "category":     "cultural",
+        "subcategory":  "general",
+        "strategy":     "playwright",
+    },
 }
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -725,11 +752,306 @@ def _scrape_beit_radical(page, cfg) -> list[VenueEvent]:
     return events
 
 
+# ── Ozen Bar scraper (static HTML) ──────────────────────────────────────────
+
+_OZEN_CAT = {
+    "הופעות":  ("music",    "live"),
+    "סטנד-אפ": ("standup",  "standup"),
+    "מסיבות":  ("music",    "dj-set"),
+    "קולנוע":  ("cultural", "film"),
+    "הרצאות":  ("cultural", "talk"),
+    "תיאטרון": ("cultural", "theater"),
+    "ג'אז":    ("music",    "jazz"),
+}
+
+def _scrape_ozen(cfg) -> list[VenueEvent]:
+    import requests
+    from bs4 import BeautifulSoup
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
+    log.info("Ozen Bar: fetching listing...")
+    try:
+        r = requests.get(cfg["events_url"], headers=headers, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        log.warning(f"Ozen Bar fetch failed: {e}")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    items = soup.select(".event-item")
+    log.info(f"Ozen Bar: {len(items)} event items found")
+    events, seen = [], set()
+
+    for item in items:
+        a_el = item.find("a", href=True)
+        href = a_el["href"] if a_el else cfg["url"]
+        title_el = item.select_one("h3, h2, strong")
+        if not title_el: continue
+        title = title_el.get_text(strip=True)
+        if not title: continue
+
+        # Category
+        cat_el = item.select_one(".categories, [class*='cat'], [class*='genre'], [class*='type']")
+        cat_txt = cat_el.get_text(strip=True) if cat_el else ""
+        category, subcategory = _OZEN_CAT.get(cat_txt, ("music", "live"))
+
+        # Date: first td is "DD-MM-YYYY"
+        tds = item.select("td")
+        ev_date, start_time = None, None
+        if tds:
+            m_date = re.search(r"(\d{1,2})-(\d{2})-(\d{4})", tds[0].get_text())
+            if m_date:
+                try:
+                    ev_date = date(int(m_date.group(3)), int(m_date.group(2)), int(m_date.group(1)))
+                except ValueError:
+                    pass
+        if len(tds) > 1:
+            m_time = re.search(r"(\d{1,2}:\d{2})", tds[1].get_text())
+            if m_time: start_time = m_time.group(1)
+
+        if not ev_date: continue
+        if ev_date < date.today(): continue
+
+        # Image from grid card (same events, parallel list)
+        img_el = item.select_one("img")
+        image_url = img_el.get("src") if img_el else None
+
+        # Fetch detail page for price + ticket link
+        price_min, price_max, ticket_url = None, None, href
+        try:
+            r2 = requests.get(href, headers=headers, timeout=12)
+            soup2 = BeautifulSoup(r2.text, "html.parser")
+            txt2 = soup2.get_text("\n")
+            # Price: "מחיר: NN" or "NN ₪"
+            prices = []
+            for m in re.findall(r"מחיר[:\s]+(\d+)", txt2):
+                n = int(m)
+                if 10 <= n <= 1000: prices.append(n)
+            for m in re.findall(r"(\d+)\s*[₪]", txt2):
+                n = int(m)
+                if 10 <= n <= 1000: prices.append(n)
+            if prices:
+                prices = sorted(set(prices))
+                price_min, price_max = prices[0], (prices[-1] if len(prices) > 1 else None)
+            # Ticket link (go-out.co or other)
+            for a2 in soup2.find_all("a", href=True):
+                if any(d in a2["href"] for d in ["go-out.co", "entrio", "eventbrite", "ticketmaster"]):
+                    ticket_url = a2["href"]
+                    break
+        except Exception as e:
+            log.debug(f"Ozen detail fetch error {href}: {e}")
+
+        source_id = f"ozen-{ev_date.isoformat()}-{_slugify(title)}"
+        if source_id in seen: continue
+        seen.add(source_id)
+
+        events.append(VenueEvent(
+            source="venue_ozen",
+            source_id=source_id,
+            title=title,
+            venue_name=cfg["label"],
+            neighborhood=cfg["neighborhood"],
+            category=category,
+            subcategory=subcategory,
+            event_date=ev_date,
+            start_time=start_time,
+            end_time=None,
+            image_url=image_url,
+            ticket_url=ticket_url,
+            source_url=href,
+            price_min=price_min,
+            price_max=price_max,
+            tags=[],
+        ))
+        time.sleep(0.5)
+
+    log.info(f"Ozen Bar: {len(events)} events parsed")
+    return events
+
+
+# ── Teder.fm scraper (static HTML) ────────────────────────────────────────────
+
+def _scrape_teder(cfg) -> list[VenueEvent]:
+    import requests
+    from bs4 import BeautifulSoup
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
+    log.info("Teder.fm: fetching listing...")
+    try:
+        r = requests.get(cfg["events_url"], headers=headers, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        log.warning(f"Teder.fm fetch failed: {e}")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    # Find all /events/NNNN links and their enclosing blocks
+    event_links = {}
+    for a in soup.find_all("a", href=re.compile(r"/events/\d+")):
+        eid = re.search(r"/events/(\d+)", a["href"]).group(1)
+        if eid not in event_links:
+            event_links[eid] = {"href": a["href"], "text": a.get_text(separator="|")}
+
+    log.info(f"Teder.fm: {len(event_links)} event links found")
+    events, today = [], date.today()
+
+    for eid, info in event_links.items():
+        # Fetch detail page (same data, cleaner format)
+        try:
+            r2 = requests.get(f"https://www.teder.fm/events/{eid}", headers=headers, timeout=12)
+            soup2 = BeautifulSoup(r2.text, "html.parser")
+            lines = [l.strip() for l in soup2.get_text("\n").splitlines() if l.strip()]
+        except Exception as e:
+            log.debug(f"Teder detail {eid} error: {e}")
+            continue
+
+        # Title: first heading or large text before date
+        title = soup2.title.string.split("|")[0].strip() if soup2.title else ""
+        title = re.sub(r"^\d+\.\d+\s*[•·]\s*!?", "", title).strip()  # strip "12.6 • "
+        if not title: continue
+
+        # Date: "DD.MM.YY" or "DD.MM.YYYY" in text lines
+        ev_date, start_time, description = None, None, ""
+        for line in lines:
+            if not ev_date:
+                m = re.search(r"(\d{1,2})\.(\d{2})\.(\d{2,4})", line)
+                if m:
+                    day, mon = int(m.group(1)), int(m.group(2))
+                    yr_raw = m.group(3)
+                    yr = int(yr_raw) if len(yr_raw) == 4 else 2000 + int(yr_raw)
+                    try: ev_date = date(yr, mon, day)
+                    except ValueError: pass
+            if not start_time:
+                m = re.search(r"^(\d{1,2}:\d{2})$", line)
+                if m: start_time = m.group(1)
+            if len(line) > 80 and not description:
+                description = line[:400]
+
+        if not ev_date or ev_date < today: continue
+
+        source_id = f"teder-{eid}"
+        events.append(VenueEvent(
+            source="venue_teder",
+            source_id=source_id,
+            title=title,
+            venue_name=cfg["label"],
+            neighborhood=cfg["neighborhood"],
+            category="music",
+            subcategory="live",
+            event_date=ev_date,
+            start_time=start_time,
+            end_time=None,
+            image_url=None,
+            ticket_url=f"https://www.teder.fm/events/{eid}",
+            source_url=f"https://www.teder.fm/events/{eid}",
+            description=description,
+            tags=["Live Music"],
+        ))
+        time.sleep(0.4)
+
+    log.info(f"Teder.fm: {len(events)} events parsed")
+    return events
+
+
+# ── Tmuna Theater scraper (Playwright, expired SSL) ──────────────────────────
+
+def _scrape_tmuna(page, cfg) -> list[VenueEvent]:
+    log.info("Tmuna: loading page...")
+    try:
+        page.goto(cfg["events_url"], timeout=25000, wait_until="domcontentloaded")
+        time.sleep(2)
+    except Exception as e:
+        log.warning(f"Tmuna load error: {e}")
+        return []
+
+    # Extract all event-like links: look for patterns with dates
+    links = page.eval_on_selector_all(
+        "a[href]",
+        "els => els.map(e => ({href: e.href, text: (e.innerText||'').trim()})).filter(x => x.text.length > 3 && x.href.includes('tmuna'))"
+    )
+    log.info(f"Tmuna: {len(links)} links found")
+
+    # Identify event links by checking for date patterns in text or href
+    event_links = []
+    for lnk in links:
+        href = lnk.get("href", "")
+        text = lnk.get("text", "")
+        # Look for event/show/performance URL patterns
+        if re.search(r"/event|/show|/perf|\d{4}/\d{2}|/\d{5,}", href, re.I):
+            event_links.append(lnk)
+
+    log.info(f"Tmuna: {len(event_links)} event links after filter")
+    events, seen, today = [], set(), date.today()
+    detail_page = page.context.new_page()
+
+    for lnk in event_links[:40]:  # cap at 40 to avoid excessive scraping
+        href = lnk["href"]
+        if href in seen: continue
+        seen.add(href)
+        try:
+            detail_page.goto(href, timeout=15000, wait_until="domcontentloaded")
+            time.sleep(1)
+            txt = detail_page.inner_text("body")
+            lines = [l.strip() for l in txt.split("\n") if l.strip()]
+            title = detail_page.title().split("|")[0].split("-")[0].strip()
+            if not title or len(title) < 3: continue
+
+            ev_date, start_time = None, None
+            for line in lines:
+                if not ev_date:
+                    # DD.MM.YYYY or DD/MM/YYYY or written Hebrew date
+                    m = re.search(r"(\d{1,2})[./](\d{2})[./](\d{4})", line)
+                    if m:
+                        try: ev_date = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                        except ValueError: pass
+                if not start_time:
+                    m = re.search(r"\b(\d{1,2}:\d{2})\b", line)
+                    if m: start_time = m.group(1)
+
+            if not ev_date or ev_date < today: continue
+
+            prices = [int(m) for m in re.findall(r"(\d{2,3})\s*[₪]", txt) if 10 <= int(m) <= 500]
+            prices += [int(m) for m in re.findall(r"[₪]\s*(\d{2,3})", txt) if 10 <= int(m) <= 500]
+            prices += [int(m) for m in re.findall(r"מחיר[:\s]+(\d+)", txt) if 10 <= int(m) <= 500]
+            prices = sorted(set(prices))
+            price_min = prices[0] if prices else None
+            price_max = prices[-1] if len(prices) > 1 else None
+
+            img_el = detail_page.query_selector("img[src*='tmuna'], .event-image img, article img, .wp-post-image")
+            img_url = img_el.get_attribute("src") if img_el else None
+
+            source_id = f"tmuna-{ev_date.isoformat()}-{_slugify(title)}"
+            events.append(VenueEvent(
+                source="venue_tmuna",
+                source_id=source_id,
+                title=title,
+                venue_name=cfg["label"],
+                neighborhood=cfg["neighborhood"],
+                category="cultural",
+                subcategory="theater",
+                event_date=ev_date,
+                start_time=start_time,
+                end_time=None,
+                image_url=img_url,
+                ticket_url=href,
+                source_url=href,
+                price_min=price_min,
+                price_max=price_max,
+                tags=["Theater"],
+            ))
+            time.sleep(0.5)
+        except Exception as e:
+            log.debug(f"Tmuna {href}: {e}")
+
+    detail_page.close()
+    log.info(f"Tmuna: {len(events)} events parsed")
+    return events
+
+
 PW_SCRAPERS = {
     "barby":        _scrape_barby,
     "levontin7":    _scrape_levontin7,
     "hameretz2":    _scrape_hameretz2,
     "beit_radical": _scrape_beit_radical,
+    "tmuna":        _scrape_tmuna,
 }
 
 def scrape_playwright_venues(venue_ids) -> list[VenueEvent]:
@@ -748,6 +1070,7 @@ def scrape_playwright_venues(venue_ids) -> list[VenueEvent]:
         ctx = browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             locale="he-IL",
+            ignore_https_errors=True,  # needed for Tmuna (expired cert)
         )
         for vid in venue_ids:
             if vid not in PW_SCRAPERS: continue
@@ -816,10 +1139,15 @@ def scrape_all_venues(venue_filter=None) -> list[VenueEvent]:
         all_events.extend(scrape_playwright_venues(pw_targets))
 
     # HTML venues
+    _HTML_SCRAPERS = {
+        "hangar11": _scrape_hangar11,
+        "ozen":     _scrape_ozen,
+        "teder":    _scrape_teder,
+    }
     for vid in targets:
         if VENUES[vid]["strategy"] != "html": continue
-        if vid == "hangar11":
-            all_events.extend(_scrape_hangar11(VENUES[vid]))
+        if vid in _HTML_SCRAPERS:
+            all_events.extend(_HTML_SCRAPERS[vid](VENUES[vid]))
 
     return all_events
 

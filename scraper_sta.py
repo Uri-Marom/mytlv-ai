@@ -214,52 +214,137 @@ def _fetch_api(sta_cat, our_cat):
         page += 1
     return events
 
-# ── HTML path ───────────────────────────────────────────────────────────────
+# ── Playwright path (STA pages are JS-rendered, requests gets no event data) ─
 
-def _listing_links(soup):
-    links = set()
-    for a in soup.find_all("a", href=True):
-        h = a["href"]
-        if re.match(r"https://www\.secrettelaviv\.com/tickets/[^/]+/?$", h) and "/categories/" not in h:
-            links.add(h.rstrip("/"))
-    return list(links)
+def _fetch_playwright(sta_cat, our_cat):
+    """Scrape a STA category using Playwright to handle JS rendering."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log.warning("playwright not installed; skipping Playwright path for STA")
+        return []
 
-def _fetch_detail(url, sta_cat, our_cat):
-    r = _get(url)
-    if not r: return None
-    soup = BeautifulSoup(r.text, "html.parser")
     cat, sub = our_cat
-    title = _og(soup,"og:title") or ""
-    title = re.sub(r"\s*\|\s*Secret Tel Aviv.*$","",title).strip()
-    slug  = url.rstrip("/").rsplit("/",1)[-1]
-    sdt, edt = _dates_from_html(soup)
-    vname, vaddr = _venue_from_html(soup)
-    if not title or not sdt: return None
-    pmin, pmax = _prices_from_soup(soup)
-    return Event(
-        source_id=slug, title=title,
-        description=(_og(soup,"og:description") or ""),
-        category=cat, subcategory=sub, sta_category=sta_cat,
-        event_date=sdt.date(), start_time=sdt.strftime("%H:%M"),
-        end_time=edt.strftime("%H:%M") if edt else None,
-        venue_name=vname, venue_address=vaddr,
-        image_url=_og(soup,"og:image"),
-        ticket_url=_ticket_url(soup),
-        source_url=url,
-        price_min=pmin,
-        price_max=pmax,
-    )
+    events, seen = [], set()
+    today_str = date.today().isoformat()
 
-def _fetch_html(sta_cat, our_cat):
-    r = _get(f"{BASE}/tickets/categories/{sta_cat}")
-    if not r: return []
-    soup = BeautifulSoup(r.text,"html.parser")
-    links = _listing_links(soup)
-    log.info(f"  HTML: {len(links)} links for {sta_cat}")
-    events = []
-    for link in links:
-        ev = _fetch_detail(link, sta_cat, our_cat)
-        if ev: events.append(ev)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        ctx = browser.new_context(
+            user_agent=HEADERS["User-Agent"],
+            locale="en-US",
+        )
+        page = ctx.new_page()
+        detail = ctx.new_page()
+
+        try:
+            cat_url = f"{BASE}/tickets/categories/{sta_cat}"
+            log.info(f"  Playwright: loading {cat_url}")
+            page.goto(cat_url, timeout=25000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+
+            # Collect event links from rendered DOM
+            links = page.eval_on_selector_all(
+                f"a[href*='/tickets/']",
+                """els => [...new Set(els
+                    .map(e => e.href)
+                    .filter(h => /secrettelaviv\.com\/tickets\/[^/]+\/?$/.test(h) && !h.includes('/categories/'))
+                )]"""
+            )
+            log.info(f"  Playwright: {len(links)} links for {sta_cat}")
+
+            for url in links:
+                slug = url.rstrip("/").rsplit("/", 1)[-1]
+                if slug in seen: continue
+                seen.add(slug)
+
+                try:
+                    detail.goto(url, timeout=20000, wait_until="domcontentloaded")
+                    detail.wait_for_timeout(2000)
+
+                    # Extract via page evaluate (works on JS-rendered content)
+                    data = detail.evaluate("""() => {
+                        const getText = sel => (document.querySelector(sel) || {}).innerText || '';
+                        const getMeta = prop => {
+                            const m = document.querySelector(`meta[property="${prop}"], meta[name="${prop}"]`);
+                            return m ? m.content : '';
+                        };
+                        // Dates from <time> or tribe-events elements
+                        const times = [...document.querySelectorAll('time[datetime], .tribe-events-start-datetime, .tribe-event-date-start, abbr.tribe-events-abbr')];
+                        const datetimes = times.map(t => t.getAttribute('datetime') || t.getAttribute('title') || t.innerText).filter(Boolean);
+                        // Venue
+                        const venueEl = document.querySelector('.tribe-venue, [class*="venue"]');
+                        const venueLines = venueEl ? venueEl.innerText.trim().split('\\n').filter(Boolean) : [];
+                        return {
+                            title: getMeta('og:title'),
+                            description: getMeta('og:description'),
+                            image: getMeta('og:image'),
+                            datetimes,
+                            venueName: venueLines[0] || '',
+                            bodyText: document.body.innerText,
+                        };
+                    }""")
+
+                    title = re.sub(r"\s*\|\s*Secret Tel Aviv.*$", "", data.get("title","")).strip()
+                    if not title: continue
+
+                    # Parse date/time from datetimes list or body text
+                    sdt = edt = None
+                    for dt_str in data.get("datetimes", []):
+                        dt = _parse_dt(dt_str.replace("Z",""))
+                        if dt:
+                            if not sdt: sdt = dt
+                            elif not edt: edt = dt
+
+                    # Fallback: search body text for ISO date
+                    if not sdt:
+                        body = data.get("bodyText", "")
+                        for m in re.finditer(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", body):
+                            dt = _parse_dt(m.group(1))
+                            if dt:
+                                if not sdt: sdt = dt
+                                elif not edt: edt = dt
+
+                    if not sdt or sdt.date().isoformat() < today_str: continue
+
+                    # Price from body text
+                    body = data.get("bodyText","")
+                    soup_body = BeautifulSoup(detail.content(), "html.parser")
+                    pmin, pmax = _prices_from_soup(soup_body)
+
+                    # Ticket URL
+                    ticket = detail.evaluate("""() => {
+                        const domains = ['entrio.co.il','eventbrite.com','ticketmaster.co.il','tickets.co.il'];
+                        for (const a of document.querySelectorAll('a[href]')) {
+                            if (domains.some(d => a.href.includes(d))) return a.href;
+                        }
+                        return null;
+                    }""")
+
+                    venue_name = data.get("venueName") or None
+                    events.append(Event(
+                        source_id=slug, title=title,
+                        description=data.get("description","")[:400],
+                        category=cat, subcategory=sub, sta_category=sta_cat,
+                        event_date=sdt.date(),
+                        start_time=sdt.strftime("%H:%M"),
+                        end_time=edt.strftime("%H:%M") if edt else None,
+                        venue_name=venue_name, venue_address=None,
+                        image_url=data.get("image"),
+                        ticket_url=ticket,
+                        source_url=url,
+                        price_min=pmin,
+                        price_max=pmax,
+                    ))
+                    time.sleep(0.5)
+                except Exception as e:
+                    log.debug(f"  STA detail {url}: {e}")
+        finally:
+            detail.close()
+            page.close()
+            browser.close()
+
+    log.info(f"  Playwright path: {len(events)} events for {sta_cat}")
     return events
 
 # ── Public entry point ──────────────────────────────────────────────────────
@@ -274,7 +359,7 @@ def scrape(use_api=True):
     all_events, seen = [], set()
     for sta_cat, our_cat in CATEGORY_MAP.items():
         log.info(f"Category: {sta_cat}")
-        evs = _fetch_api(sta_cat, our_cat) if use_api else _fetch_html(sta_cat, our_cat)
+        evs = _fetch_api(sta_cat, our_cat) if use_api else _fetch_playwright(sta_cat, our_cat)
         for ev in evs:
             if ev.source_id not in seen:
                 seen.add(ev.source_id)

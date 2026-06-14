@@ -249,6 +249,41 @@ def run(seed_only=False, similarity_only=False):
             except Exception as e:
                 log.error(f"Bandsintown scraper failed: {e}")
 
+            log.info("=== Scraping Venues (Barby, Levontin, Ozen, Teder, Tmuna, ...) ===")
+            try:
+                from scraper_venues import scrape_all_venues
+                venue_evs = scrape_all_venues()
+                # Convert VenueEvent dataclasses to dicts compatible with upsert_events
+                venue_dicts = []
+                for ve in venue_evs:
+                    venue_dicts.append({
+                        "source":      ve.source,
+                        "source_id":   ve.source_id,
+                        "title":       ve.title,
+                        "description": ve.description,
+                        "category":    ve.category,
+                        "subcategory": ve.subcategory,
+                        "sta_category": None,
+                        "venue_name":  ve.venue_name,
+                        "neighborhood": ve.neighborhood,
+                        "event_date":  ve.event_date,
+                        "start_time":  ve.start_time,
+                        "end_time":    ve.end_time,
+                        "price_min":   ve.price_min,
+                        "price_max":   ve.price_max,
+                        "image_url":   ve.image_url,
+                        "ticket_url":  ve.ticket_url,
+                        "source_url":  ve.source_url,
+                        "tags":        ve.tags,
+                    })
+                by_source = defaultdict(list)
+                for d in venue_dicts:
+                    by_source[d["source"]].append(d)
+                for src, evs in by_source.items():
+                    upsert_events(conn, evs, src)
+            except Exception as e:
+                log.error(f"Venue scrapers failed: {e}", exc_info=True)
+
     log.info("=== Computing similarity ===")
     compute_similarity(conn)
 
